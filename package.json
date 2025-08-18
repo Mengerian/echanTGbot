@@ -9,7 +9,7 @@
   },
   "keywords": [],
   "author": "alita",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "async": "^3.2.4",
     "axios": "^1.4.0",

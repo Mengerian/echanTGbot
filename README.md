@@ -18,3 +18,8 @@ eChan Telegram bot for group management and data queries.
 1) Install dependencies
 ```bash
 npm install
+```
+
+## License
+
+MIT
