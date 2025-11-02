@@ -7,10 +7,8 @@ const {
 } = require('../../../config/config.js');
 const { createRateLimiter } = require('../services/rateLimiter.js');
 
-// Keep track of each user's conversation ID
 const userConversationIds = {};
 
-// Unified limiter: global concurrency + per-user cooldown + daily quota
 const limiter = createRateLimiter({
   concurrency: GLOBAL_CONCURRENCY,
   requestIntervalMs: REQUEST_INTERVAL_MS,
@@ -21,7 +19,6 @@ const limiterConfig = limiter.getConfig();
 
 function escapeMarkdownV2(text) {
   if (text == null) return '';
-  // Escape Telegram MarkdownV2 reserved characters: _ * [ ] ( ) ~ ` > # + - = | { } . ! and backslash
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}\.!\\])/g, '\\$1');
 }
 
@@ -45,15 +42,14 @@ async function sendLongMessage(bot, chatId, text, baseOptions = {}, onChunkSent)
   const chunks = chunkText(text, 3800);
   for (const [index, chunk] of chunks.entries()) {
     try {
-      // Prefer legacy Markdown to preserve API-provided formatting
       await bot.sendMessage(chatId, chunk, { ...baseOptions, parse_mode: "Markdown" });
     } catch (mdError) {
       try {
-        console.log('⚠️ Markdown 解析失败，尝试使用 MarkdownV2 并自动转义:', mdError.message);
+        console.log('Markdown failed, trying MarkdownV2:', mdError.message);
         const safeV2 = escapeMarkdownV2(chunk);
         await bot.sendMessage(chatId, safeV2, { ...baseOptions, parse_mode: "MarkdownV2" });
       } catch (markdownError) {
-        console.log('⚠️ MarkdownV2 渲染失败，降级到普通文本发送:', markdownError.message);
+        console.log('MarkdownV2 failed, fallback to plain text:', markdownError.message);
         await bot.sendMessage(chatId, chunk, { ...baseOptions });
       }
     }
@@ -63,14 +59,12 @@ async function sendLongMessage(bot, chatId, text, baseOptions = {}, onChunkSent)
   }
 }
 
-// Rate limiting moved to unified limiter service
-
 async function handleRequestIfAllowed(msg, query, bot, ALLOWED_USERS, BLOCKED_USERS, ports) {
   const userId = msg.from.id;
   const username = msg.from.username;
 
   if (BLOCKED_USERS && BLOCKED_USERS.includes(username)) {
-    console.log(`❌ User ${username} is blacklisted, rejecting request`);
+    console.log(`User ${username} is blacklisted, rejecting request`);
     await bot.sendMessage(
       msg.chat.id,
       "Sorry, your account is restricted from using this feature. Please contact admin if you have questions.",
@@ -93,7 +87,7 @@ async function handleRequestIfAllowed(msg, query, bot, ALLOWED_USERS, BLOCKED_US
       const ms = check.msUntilReset || 0;
       const hoursLeft = Math.ceil(ms / (60 * 60 * 1000));
       const minutesLeft = Math.ceil(ms / (60 * 1000)) % 60;
-      console.log(`❌ User ${username} has reached the 24-hour request limit`);
+      console.log(`User ${username} reached 24h request limit`);
       await bot.sendMessage(
         msg.chat.id,
         `You have reached the maximum number of requests (${limiterConfig.dailyLimit}) for 24 hours.\nPlease try again in approximately ${hoursLeft} hours and ${minutesLeft} minutes.`,
@@ -127,9 +121,9 @@ async function handleRequestIfAllowed(msg, query, bot, ALLOWED_USERS, BLOCKED_US
         { reply_to_message_id: msg.message_id },
         (sentChunk) => bot.emit('send_message', msg.chat.id, sentChunk)
       );
-      console.log('✅ 对话请求处理完成');
+      console.log('Conversation request completed');
     } catch (error) {
-      console.error('❌ 对话请求处理失败:', error.message);
+      console.error('Conversation request failed:', error.message);
       if (error.response) {
         const status = error.response.status;
         if ([400, 500, 502].includes(status) ||
@@ -166,7 +160,7 @@ async function handlePhotoMessage(msg, photo, query, bot, ALLOWED_USERS, BLOCKED
   const username = msg.from.username;
 
   if (BLOCKED_USERS && BLOCKED_USERS.includes(username)) {
-    console.log(`❌ User ${username} is blacklisted, rejecting photo request`);
+    console.log(`User ${username} is blacklisted, rejecting photo request`);
     await bot.sendMessage(
       msg.chat.id,
       "Sorry, your account is restricted from using this feature. Please contact admin if you have questions.",
@@ -189,7 +183,7 @@ async function handlePhotoMessage(msg, photo, query, bot, ALLOWED_USERS, BLOCKED
       const ms = check.msUntilReset || 0;
       const hoursLeft = Math.ceil(ms / (60 * 60 * 1000));
       const minutesLeft = Math.ceil(ms / (60 * 1000)) % 60;
-      console.log(`❌ User ${username} has reached the 24-hour photo request limit`);
+      console.log(`User ${username} reached 24h photo request limit`);
       await bot.sendMessage(
         msg.chat.id,
         `You have reached the maximum number of requests (${limiterConfig.dailyLimit}) for 24 hours.\nPlease try again in approximately ${hoursLeft} hours and ${minutesLeft} minutes.`,
@@ -223,7 +217,7 @@ async function handlePhotoMessage(msg, photo, query, bot, ALLOWED_USERS, BLOCKED
         (sentChunk) => bot.emit('send_message', msg.chat.id, sentChunk)
       );
     } catch (error) {
-      console.error('❌ 图片处理请求失败:', error.message);
+      console.error('Photo request failed:', error.message);
       if (error.response) {
         const status = error.response.status;
         if ([400, 500, 502].includes(status) ||

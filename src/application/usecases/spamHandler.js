@@ -5,28 +5,58 @@ const {
     RELEVANT_KEYWORDS
 } = require('../../../config/config.js');
 
-// Infra: analysis, secondary spam check, translation, admin actions, storage
 const { fetchMessageAnalysis } = require('../../infrastructure/ai/messageAnalysis.js');
 const { performSecondarySpamCheck } = require('../../infrastructure/ai/secondarySpamCheck.js');
 const { translateToEnglishIfTargetGroup } = require('../../infrastructure/ai/translation.js');
 const { updateSpamRecord } = require('../../infrastructure/storage/spamUserStore.js');
-const { kickUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
+const { kickUser, unbanUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
 
-// Domain policies 
 const {
     isSpamMessage,
     decideSecondarySpamCheck,
     decideDisciplinaryAction,
 } = require('../../domain/policies/spamPolicy.js');
 
-// Spam count storage handled in infra
+function buildCombinedAnalysisQuery(msg) {
+    try {
+        const isForwarded = Boolean(msg && (msg.forward_from || msg.forward_sender_name || msg.forward_from_chat));
+        const text = (msg && msg.text) ? String(msg.text).trim() : '';
+        const caption = (msg && msg.caption) ? String(msg.caption).trim() : '';
+        const contentParts = [];
 
-// Keyword relevance handled by domain policy
+        if (msg && msg.quote && msg.quote.text) {
+            const quoteText = String(msg.quote.text).trim();
+            if (quoteText) {
+                contentParts.push(`[Quoted]: ${quoteText}`);
+            }
+        }
 
-// Handle spam (returns whether handled as spam)
-async function handleSpamMessage(msg, bot, spamData) {
+        if (isForwarded) {
+            const forwardUser = msg.forward_from?.username
+                ? `@${msg.forward_from.username}`
+                : (msg.forward_sender_name || msg.forward_from_chat?.title || 'Unknown');
+
+            if (text) {
+                contentParts.push(`[Forwarded from ${forwardUser}] ${text}`);
+            } else if (caption) {
+                contentParts.push(`[Forwarded from ${forwardUser}] ${caption}`);
+            }
+        } else {
+            if (text) {
+                contentParts.push(text);
+            } else if (caption) {
+                contentParts.push(caption);
+            }
+        }
+
+        return contentParts.join('\n\n').trim();
+    } catch (e) {
+        return String(msg?.text || msg?.caption || '');
+    }
+}
+
+async function handleSpamMessage(msg, bot, spamData, query) {
     const { deviation, suspicion, inducement, spam } = spamData;
-    const query = msg.text || msg.caption || '';
     const primarySpam = isSpamMessage({
         spamFlag: spam === true,
         deviation,
@@ -48,85 +78,138 @@ async function handleSpamMessage(msg, bot, spamData) {
     return false;
 }
 
-// Delete spam message and act
 async function handleSpamDeletion(msg, bot) {
     try {
-        // Always notify admins about source (group and user)
+        const NOTIFICATION_GROUP_ID = -4815444028;
+        
         const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || 'Unknown User';
         const groupName = msg.chat.title || 'Unknown Group';
         const sourceInfo = `Spam detected from ${userName} in "${groupName}"`;
-        await bot.sendMessage(ALITAYIN_USER_ID, sourceInfo);
-        await bot.sendMessage(KOUSH_USER_ID, sourceInfo);
+        await bot.sendMessage(NOTIFICATION_GROUP_ID, sourceInfo);
 
-        // Forward to admins (prefer ALITAYIN)
-        await forwardMessage(bot, ALITAYIN_USER_ID, msg.chat.id, msg.message_id);
-        await forwardMessage(bot, KOUSH_USER_ID, msg.chat.id, msg.message_id);
+        await forwardMessage(bot, NOTIFICATION_GROUP_ID, msg.chat.id, msg.message_id);
 
-        // Check if sender is admin
         const isAdmin = await getIsAdmin(bot, msg.chat.id, msg.from.id);
 
         if (!isAdmin) {
             await deleteMessage(bot, msg.chat.id, msg.message_id);
             
-            // Update user spam record
             const userRecord = updateSpamRecord(msg.from.id);
             
             let actionTaken = '';
             const action = decideDisciplinaryAction({ currentSpamCountInWindow: userRecord.count });
             if (action === 'warn') {
-                const warningMessage = await bot.sendMessage(
-                    msg.chat.id,
-                    `${userName} your last message was marked as spam and removed. Another message of this kind will lead to ban.`
-                );
-                actionTaken = `warned ${userName} (first spam offense)`;
-                // setTimeout(() => {
-                //     bot.deleteMessage(msg.chat.id, warningMessage.message_id).catch(() => {});
-                // }, 3000);
+                const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
+                if (kickSuccess) {
+                    await unbanUser(bot, msg.chat.id, msg.from.id);
+                    actionTaken = `kicked ${userName} (first spam offense, can rejoin)`;
+                } else {
+                    actionTaken = `cannot kick ${userName} (regular group limitation - first spam offense)`;
+                }
             } else {
                 const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
                 if (kickSuccess) {
-                    actionTaken = `kicked ${userName} (${userRecord.count} spam messages in 30min)`;
-                    await bot.sendMessage(msg.chat.id, `${userName} was kicked for spam`);
+                    actionTaken = `BANNED ${userName} permanently (${userRecord.count} spam messages in 3h)`;
                 } else {
-                    actionTaken = `cannot kick ${userName} (regular group limitation - ${userRecord.count} spam messages in 30min)`;
+                    actionTaken = `cannot ban ${userName} (regular group limitation - ${userRecord.count} spam messages in 3h)`;
                 }
             }
             
             const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
-            await bot.sendMessage(KOUSH_USER_ID, explanationMessage);
-            await bot.sendMessage(ALITAYIN_USER_ID, explanationMessage);
+            await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage);
         }
     } catch (error) {
         console.error('Failed to handle spam deletion:', error);
     }
 }
 
-// Handle translation (infra)
 async function handleTranslation(msg, bot) {
     await translateToEnglishIfTargetGroup(msg, bot);
 }
 
-// Main entry
 async function processGroupMessage(msg, bot, ports) {
     if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") {
         return;
     }
 
-    const query = msg.text || msg.caption || '';
+    const query = buildCombinedAnalysisQuery(msg);
     
-    // Skip empty messages
+    console.log('Message structure (selected fields):', JSON.stringify({
+        text: msg.text,
+        caption: msg.caption,
+        forward_from: msg.forward_from ? { username: msg.forward_from.username, id: msg.forward_from.id } : null,
+        forward_sender_name: msg.forward_sender_name,
+        forward_from_chat: msg.forward_from_chat ? { title: msg.forward_from_chat.title, id: msg.forward_from_chat.id } : null,
+        forward_origin: msg.forward_origin,
+        reply_to_message: msg.reply_to_message ? {
+            text: msg.reply_to_message.text,
+            caption: msg.reply_to_message.caption,
+            from: msg.reply_to_message.from ? { username: msg.reply_to_message.from.username, id: msg.reply_to_message.from.id } : null
+        } : null,
+        quote: msg.quote,
+        external_reply: msg.external_reply,
+        entities: msg.entities,
+        caption_entities: msg.caption_entities,
+        link_preview_options: msg.link_preview_options,
+        has_photo: !!msg.photo,
+        has_video: !!msg.video,
+        has_document: !!msg.document
+    }, null, 2));
+    
+    console.log('All msg keys:', Object.keys(msg).join(', '));
+    
+    console.log('Built query for detection:');
+    console.log(query);
+    console.log('Query length:', query.length);
+    
     if (!query.trim()) {
-        console.log('跳过空消息处理');
+        console.log('Skip empty message');
         return;
     }
 
-    // Only detect spam if target member is present
     if (!ports || !ports.telegramGroup || typeof ports.telegramGroup.hasMember !== 'function') {
+        console.log('Ports not available, skipping spam detection');
         return;
     }
     const hasAlitayin = await ports.telegramGroup.hasMember(msg.chat.id, ALITAYIN_USER_ID);
+    console.log(`Has target member: ${hasAlitayin}`);
     if (!hasAlitayin) {
+        console.log('Target member not in group, skipping spam detection');
         return;
+    }
+
+    const botInfo = await bot.getMe();
+    const botMember = await bot.getChatMember(msg.chat.id, botInfo.id);
+    const isBotAdmin = ['creator', 'administrator'].includes(botMember.status);
+    console.log(`Bot is admin: ${isBotAdmin}`);
+
+    if (isBotAdmin) {
+        let channelUsername = null;
+        
+        if (msg.external_reply && msg.external_reply.origin) {
+            const origin = msg.external_reply.origin;
+            if (origin.type === 'channel' && origin.chat && origin.chat.username) {
+                channelUsername = origin.chat.username;
+            } else if (origin.sender_chat && origin.sender_chat.username) {
+                channelUsername = origin.sender_chat.username;
+            }
+        }
+        
+        if (!channelUsername && msg.quote && msg.quote.origin) {
+            const origin = msg.quote.origin;
+            if (origin.type === 'channel' && origin.chat && origin.chat.username) {
+                channelUsername = origin.chat.username;
+            } else if (origin.sender_chat && origin.sender_chat.username) {
+                channelUsername = origin.sender_chat.username;
+            }
+        }
+        
+        const blacklistedChannels = ['Insider_SOL_Trades'];
+        if (channelUsername && blacklistedChannels.includes(channelUsername)) {
+            console.log(`Quote/external_reply from blacklisted channel @${channelUsername}, marking as spam immediately`);
+            await handleSpamDeletion(msg, bot);
+            return;
+        }
     }
 
     const answer = await fetchMessageAnalysis(query, msg.from.id);
@@ -135,22 +218,17 @@ async function processGroupMessage(msg, bot, ports) {
         return;
     }
 
-    const botInfo = await bot.getMe();
-    const botMember = await bot.getChatMember(msg.chat.id, botInfo.id);
-    const isBotAdmin = ['creator', 'administrator'].includes(botMember.status);
-
     if (isBotAdmin) {
-        const wasSpam = await handleSpamMessage(msg, bot, answer);
+        const wasSpam = await handleSpamMessage(msg, bot, answer, query);
         if (!wasSpam && answer.is_english === false) {
-            console.log('🔄 Non-English detected, translating');
+            console.log('Non-English detected, translating');
             await handleTranslation(msg, bot);
         } else if (!wasSpam) {
-            console.log('✅ Normal message');
+            console.log('Normal message');
         }
     }
 }
 
-// Exports
 module.exports = {
     processGroupMessage,
 };

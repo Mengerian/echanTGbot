@@ -7,6 +7,7 @@ ARCHITECTURE.md
 # Ignore folders not meant for version control
 testscripts/
 .cursor/
+data/
 
 # Node dependencies
 node_modules/

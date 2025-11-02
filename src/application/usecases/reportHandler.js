@@ -7,9 +7,7 @@ const {
   sendAdminReports,
 } = require('../../infrastructure/telegram/reportingActions.js');
 
-/** Handle /report: forward, delete, notify. */
 async function handleReportCommand(msg, bot) {
-  // Must be a reply
   if (!msg.reply_to_message) {
     await sendChatNotification(bot, msg.chat.id, "Please reply to the message you want to report, then send /report.");
     return;
@@ -24,13 +22,10 @@ async function handleReportCommand(msg, bot) {
   const original = msg.reply_to_message;
   const groupName = msg.chat.title || 'Unknown Group';
 
-  // Prefer forwarding to ALITAYIN, optionally to KOUSH
   await forwardOrCopyToAdmin(bot, ALITAYIN_USER_ID, original, msg.chat.id, groupName);
 
-  // Best-effort delete original message
   await deleteMessageSafe(bot, msg.chat.id, original.message_id);
 
-  // Notify chat and admins
   const reporterUsername = msg.from.username;
   const notificationMessage = `Thanks for the report @${reporterUsername}, I've removed the spam message.`;
   await sendChatNotification(bot, msg.chat.id, notificationMessage);

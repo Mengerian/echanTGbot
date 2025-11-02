@@ -1,7 +1,7 @@
 // In-memory store for tracking users' spam offenses within a rolling window.
 // Infrastructure layer: stateful storage with internal cleanup.
 
-const TRACKING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const TRACKING_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 const spamUserTracker = new Map();
 

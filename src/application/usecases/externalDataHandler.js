@@ -2,16 +2,9 @@ const getData = require('../../infrastructure/data/data.js');
 const { withTimeout } = require('../../domain/utils/async.js');
 const { wrapInContext } = require('../../domain/formatting/context.js');
 
-/**
- * Get external data via chat port.
- * @param {string} query
- * @param {number} userId
- * @param {number} timeout
- * @returns {Promise<string|null>}
- */
 async function fetchExternalDataViaPort(ports, query, userId, timeout = 60000) {
     try {
-        console.log('🔧 检测到需要外部工具或最新数据，调用外部API');
+        console.log('Calling external API for latest data');
         
         const getExternalData = async () => {
             const externalResponse = await ports.chat.sendStreamingText(query, userId);
@@ -21,59 +14,44 @@ async function fetchExternalDataViaPort(ports, query, userId, timeout = 60000) {
         const externalData = await withTimeout(getExternalData, timeout, 'External API Timeout');
         
         if (externalData && externalData.trim()) {
-            console.log('✅ 成功获取外部API数据，长度:', externalData.length);
+            console.log('External API data received, length:', externalData.length);
             return externalData;
         } else {
-            console.log('⚠️ 外部API返回空数据');
+            console.log('External API returned empty data');
             return null;
         }
     } catch (error) {
-        console.log('⚠️ 外部API调用失败或超时，继续处理原始请求:', error.message);
+        console.log('External API call failed or timeout:', error.message);
         
-        // 详细错误日志
         if (error.response) {
-            console.log('📋 错误详情:');
-            console.log('- 状态码:', error.response.status);
-            console.log('- 响应头:', JSON.stringify(error.response.headers, null, 2));
-            console.log('- 响应体:', JSON.stringify(error.response.data, null, 2));
+            console.log('Error details:');
+            console.log('- Status:', error.response.status);
+            console.log('- Headers:', JSON.stringify(error.response.headers, null, 2));
+            console.log('- Body:', JSON.stringify(error.response.data, null, 2));
         } else if (error.request) {
-            console.log('📋 请求错误详情:', error.request);
+            console.log('Request error details:', error.request);
         } else {
-            console.log('📋 其他错误详情:', error.message);
+            console.log('Other error details:', error.message);
         }
         
         return null;
     }
 }
 
-/**
- * Prepend external data to query when needed.
- * @param {string} query
- * @param {Object} analysis
- * @param {number} userId
- * @returns {Promise<string>}
- */
 async function processExternalData(query, analysis, userId, ports) {
-    // 检查是否需要调用外部工具或获取最新数据
     if (analysis && (analysis.needs_tool === true || analysis.wants_latest_data === true)) {
         const externalData = await fetchExternalDataViaPort(ports, query, userId);
         
         if (externalData) {
             const wrappedExternalData = wrapInContext('External Tool Data', externalData);
             query = `${wrappedExternalData}\n\n${query}`;
-            console.log('🔄 已将外部数据添加到query中');
+            console.log('External data added to query');
         }
     }
     
     return query;
 }
 
-/**
- * Prepare conversation query with analysis and optional external data.
- * @param {string} query
- * @param {number} userId
- * @returns {Promise<{shouldRespond:boolean, query:string}>}
- */
 async function prepareConversationQuery(ports, query, userId) {
     const getAnalysis = async () => {
         const analysis = await ports.analysis.analyzeMessage(query, userId);
@@ -91,18 +69,10 @@ async function prepareConversationQuery(ports, query, userId) {
         const enriched = await processExternalData(query, analysisResult, userId, ports);
         return { shouldRespond: true, query: enriched };
     } catch (error) {
-        // 分析失败或超时：默认继续处理原始查询
         return { shouldRespond: true, query };
     }
 }
 
-/**
- * Inject network data when keyword is present.
- * @param {string} query
- * @param {string[]} dataKeywords
- * @param {number} timeoutMs
- * @returns {Promise<string>}
- */
 async function injectNetworkDataIfKeyword(query, dataKeywords = [], timeoutMs = 3000) {
     const { matchesAnyKeywordWordBoundary } = require('../../domain/utils/text.js');
     const containsDataKeyword = matchesAnyKeywordWordBoundary(query, dataKeywords);
@@ -125,7 +95,6 @@ async function injectNetworkDataIfKeyword(query, dataKeywords = [], timeoutMs = 
             return `${dataString}\n\n${query}`;
         }
     } catch (error) {
-        // 忽略超时/错误，直接返回原始query
     }
     return query;
 }

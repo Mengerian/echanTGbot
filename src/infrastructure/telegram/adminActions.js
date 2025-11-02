@@ -1,16 +1,31 @@
 // Telegram administrative actions: delete message, kick user, forward message, etc.
 // Infrastructure layer module.
 
-async function kickUser(bot, chatId, userId) {
+// Permanently ban user from the chat (kick + prevent rejoin)
+async function banUser(bot, chatId, userId) {
   try {
     await bot.banChatMember(chatId, userId);
     return true;
   } catch (error) {
     if (error.message.includes('method is available for supergroup and channel chats only')) {
-      console.log('⚠️ Cannot kick user - regular group limitation');
+      console.log('⚠️ Cannot ban user - regular group limitation');
       return false;
     }
-    console.error('Failed to kick user:', error);
+    console.error('Failed to ban user:', error);
+    return false;
+  }
+}
+
+// Alias for backward compatibility
+const kickUser = banUser;
+
+// Unban user (allow them to rejoin)
+async function unbanUser(bot, chatId, userId) {
+  try {
+    await bot.unbanChatMember(chatId, userId);
+    return true;
+  } catch (error) {
+    console.error('Failed to unban user:', error);
     return false;
   }
 }
@@ -47,6 +62,7 @@ async function getIsAdmin(bot, chatId, userId) {
 
 module.exports = {
   kickUser,
+  unbanUser,
   deleteMessage,
   forwardMessage,
   getIsAdmin,

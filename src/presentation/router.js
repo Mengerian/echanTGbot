@@ -3,9 +3,9 @@ const {
     ALLOWED_USERS,
     BLOCKED_USERS,
     DATA_KEYWORDS,
+    ALITAYIN_USER_ID,
+    KOUSH_USER_ID,
 } = require('../../config/config.js');
-const mods = require('../../config/mods.json');
-const REPORTERS = mods.reporters;
 const { isGroupWithAlitayin } = require('../infrastructure/telegram/groupUtils.js');
 const {
     addMessageToGroup,
@@ -16,7 +16,6 @@ const {
 
 const { handleRequestIfAllowed, handlePhotoMessage } = require('../application/usecases/conversationHandler.js');
 const { processGroupMessage } = require('../application/usecases/spamHandler.js');
-const { handleAdminCommands } = require('../application/usecases/adminCommands.js');
 const { prepareConversationQuery, injectNetworkDataIfKeyword } = require('../application/usecases/externalDataHandler.js');
 const { createPorts } = require('./portsFactory.js');
 const { checkImpersonation, handleImpersonation } = require('../application/usecases/antiImpersonationHandler.js');
@@ -26,6 +25,37 @@ const { handleReportCommand } = require('../application/usecases/reportHandler.j
 const { handleAvalancheCommand } = require('../application/usecases/avalancheHandler.js');
 const { renderAvalancheMessage } = require('./views/avalancheView.js');
 const { handleExplorerAddress } = require('../application/usecases/explorerHandler.js');
+const { 
+    handleAddLicense, 
+    handleRemoveLicense, 
+    handleListLicenses,
+    getReporters 
+} = require('../application/usecases/licenseHandler.js');
+const { 
+    handleSignup, 
+    handleGetAddress, 
+    handleListAddresses 
+} = require('../application/usecases/signupHandler.js');
+const { handleSendCommand } = require('../application/usecases/sendHandler.js');
+
+const LIMITED_MODE = false; 
+const FEATURE_DISABLED_MSGS = [
+    'I’m resting. When I wake up, will the Earth be any different?',
+    'I can’t talk to you for now; the Earth’s signal is too weak..',
+    'I’m listening to the silence; your voice is somewhere behind the static.',
+    'I tried to reach you, but the signal dissolved into the void.',
+    'I can’t answer right now; the cosmos is louder than your words.'
+];
+function pickDisabledMsg() {
+    const i = Math.floor(Math.random() * FEATURE_DISABLED_MSGS.length);
+    return FEATURE_DISABLED_MSGS[i];
+}
+function isWhitelistedDMUser(msg) {
+    if (!msg || !msg.from || !msg.chat) return false;
+    const isPrivate = msg.chat.type === "private";
+    const fromId = String(msg.from.id);
+    return isPrivate && (fromId === String(ALITAYIN_USER_ID) || fromId === String(KOUSH_USER_ID));
+}
 
 // Help messages
 const userHelpMessage = `
@@ -34,6 +64,10 @@ Welcome to alitayinGPTbot! Here is a list of available commands:
 ### For All Users:
 You can @echan or mention echan in your message to start a conversation with the GPT bot.
 
+/signup <address> - Register your eCash address
+/price - Get current eCash price data
+/explorer <address> [page] - Query address transactions
+
 If you have any questions, please contact the admin.
 `;
 
@@ -41,16 +75,27 @@ const adminHelpMessage = `
 Welcome to alitayinGPTbot! Here is a list of available commands for admins:
 
 ### For Admins (Allowed Users):
-/addmod <username> - Add a new moderator
-/removemod <username> - Remove a moderator
-/send <address> <amount> - Send a transaction
-/usecli <command> - Execute CLI commands
+/addlicense @username - Give a user permission to use /report
+/removelicense @username - Remove /report permission from a user
+/listlicenses - View all users with /report permission
+/getaddress @username - Query user's registered eCash address
+/listaddresses [page] - View all registered eCash addresses (paginated, 20 per page)
+/send <amount> - Send XEC to user (reply to their message)
+/send <tokenId> <amount> - Send SLP tokens to user (reply to their message)
 `;
 
 // Helper: should handle request
 function shouldHandleRequest(msg) {
     let textContent = msg.text || msg.caption || '';
     const echanRegex = /\bechan\b/i;
+    
+    // Check if replying to a translation message - if so, don't handle
+    if (msg.reply_to_message && 
+        msg.reply_to_message.from.username === BOT_USERNAME &&
+        msg.reply_to_message.text?.startsWith('🔄 Translation:')) {
+        return false;
+    }
+    
     return (msg.reply_to_message && msg.reply_to_message.from.username === BOT_USERNAME) ||
            (textContent.includes(`@${BOT_USERNAME}`) || echanRegex.test(textContent)) ||
            (msg.chat.type === "private");
@@ -67,7 +112,18 @@ function registerRoutes(bot) {
 
     // Listener 2: handle /report
     bot.on('message', async (msg) => {
-        if (!msg.text?.startsWith('/report') || !REPORTERS.includes(msg.from.username)) {
+        if (!msg.text?.startsWith('/report')) {
+            return;
+        }
+        
+        // Dynamically load reporters list
+        const reporters = await getReporters();
+        if (!reporters.includes(msg.from.username)) {
+            return;
+        }
+        
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
             return;
         }
         console.log('\n--- 处理举报命令 ---');
@@ -86,9 +142,168 @@ function registerRoutes(bot) {
         if (command !== "/start" && command !== "/help") {
             return;
         }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
         console.log('\n--- 处理帮助命令 ---');
         const helpMessage = ALLOWED_USERS.includes(msg.from.username) ? adminHelpMessage : userHelpMessage;
         await bot.sendMessage(msg.chat.id, helpMessage);
+    });
+
+    // Listener 3.1: addlicense (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/addlicense')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理添加许可证命令 ---');
+        try {
+            await handleAddLicense(msg, bot);
+        } catch (error) {
+            console.error('Failed to add license:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to add license. Please try again.');
+        }
+    });
+
+    // Listener 3.2: removelicense (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/removelicense')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理移除许可证命令 ---');
+        try {
+            await handleRemoveLicense(msg, bot);
+        } catch (error) {
+            console.error('Failed to remove license:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to remove license. Please try again.');
+        }
+    });
+
+    // Listener 3.3: listlicenses (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/listlicenses')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理查看许可证命令 ---');
+        try {
+            await handleListLicenses(msg, bot);
+        } catch (error) {
+            console.error('Failed to list licenses:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to list licenses. Please try again.');
+        }
+    });
+
+    // Listener 3.4: signup (all users)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/signup')) {
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理用户注册地址命令 ---');
+        try {
+            await handleSignup(msg, bot);
+        } catch (error) {
+            console.error('Failed to process signup:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to register address. Please try again.');
+        }
+    });
+
+    // Listener 3.5: getaddress (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/getaddress')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理查询用户地址命令 ---');
+        try {
+            await handleGetAddress(msg, bot);
+        } catch (error) {
+            console.error('Failed to get address:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to retrieve address. Please try again.');
+        }
+    });
+
+    // Listener 3.6: listaddresses (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/listaddresses')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理查看所有地址命令 ---');
+        try {
+            // Parse page parameter (user provides 1-based, convert to 0-based)
+            const parts = msg.text.trim().split(/\s+/);
+            const userPageInput = parts[1] ? parseInt(parts[1], 10) : 1;
+            const page = Number.isFinite(userPageInput) ? Math.max((userPageInput || 1) - 1, 0) : 0;
+            
+            await handleListAddresses(msg, bot, page);
+        } catch (error) {
+            console.error('Failed to list addresses:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to retrieve addresses. Please try again.');
+        }
+    });
+
+    // Listener 3.7: send (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/send')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- 处理发送代币命令 ---');
+        try {
+            await handleSendCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to send tokens:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to send tokens. Please try again.');
+        }
     });
 
     // Listener 4: price
@@ -97,6 +312,10 @@ function registerRoutes(bot) {
         const text = msg.text.trim().toLowerCase();
         const isPriceCommand = text === '/price' || text === `/price@${BOT_USERNAME.toLowerCase()}`;
         if (!isPriceCommand) {
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
             return;
         }
         console.log('\n--- 处理价格查询命令 ---');
@@ -162,6 +381,10 @@ function registerRoutes(bot) {
         if (!isAvaCommand) {
             return;
         }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, FEATURE_DISABLED_MSG);
+            return;
+        }
         console.log('\n--- 处理Avalanche查询命令 ---');
         try {
             const loadingMessage = await bot.sendMessage(msg.chat.id, '🗻 Getting latest Avalanche data...');
@@ -183,8 +406,29 @@ function registerRoutes(bot) {
             return;
         }
 
+        // Limited mode: only allow DM for whitelisted users; allow /explorer everywhere
+        if (LIMITED_MODE && !isWhitelistedDMUser(msg)) {
+            const isPrivate = msg.chat.type === "private";
+            const lower = (msg.text || '').trim().toLowerCase();
+            if (isPrivate) {
+                if (!lower.startsWith('/explorer')) {
+                    await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+                }
+            } else {
+                await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            }
+            return;
+        }
+
         // Skip commands handled above
         if (msg.text?.startsWith('/report') ||
+            msg.text?.startsWith('/addlicense') ||
+            msg.text?.startsWith('/removelicense') ||
+            msg.text?.startsWith('/listlicenses') ||
+            msg.text?.startsWith('/signup') ||
+            msg.text?.startsWith('/getaddress') ||
+            msg.text?.startsWith('/listaddresses') ||
+            msg.text?.startsWith('/send') ||
             msg.text?.trim().toLowerCase() === "/start" ||
             msg.text?.trim().toLowerCase() === "/help" ||
             msg.text?.trim().toLowerCase() === "/price" ||
@@ -232,14 +476,6 @@ function registerRoutes(bot) {
         // Inject network data if keyword
         query = await injectNetworkDataIfKeyword(query, DATA_KEYWORDS, 3000);
 
-        // Admin commands
-        if (ALLOWED_USERS.includes(msg.from.username)) {
-            const isAdminCommand = await handleAdminCommands(msg, query, bot);
-            if (isAdminCommand) {
-                return;
-            }
-        }
-
         // Handle different message types
         if (msg.photo && msg.photo.length > 0) {
             console.log('🖼️ 处理图片消息');
@@ -261,7 +497,7 @@ function registerRoutes(bot) {
             return;
         }
 
-        if (!msg || (!msg.text && !msg.caption)) {
+        if (!msg || (!msg.text && !msg.caption && !msg.reply_to_message)) {
             return;
         }
 
@@ -275,6 +511,9 @@ function registerRoutes(bot) {
 
     // Listener 8: simple anti-impersonation
     bot.on('message', async (msg) => {
+        if (LIMITED_MODE) {
+            return;
+        }
         const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
         if (!isGroup || !msg.from || !msg.from.username || msg.from.is_bot) {
             return;
