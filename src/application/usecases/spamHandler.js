@@ -12,6 +12,7 @@ const { translateToEnglishIfTargetGroup } = require('../../infrastructure/ai/tra
 const { updateSpamRecord } = require('../../infrastructure/storage/spamUserStore.js');
 const { isSimilarToSpam, addSpamMessage } = require('../../infrastructure/storage/spamMessageCache.js');
 const { kickUser, unbanUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
+const { containsWhitelistKeyword } = require('../../infrastructure/storage/whitelistKeywordStore.js');
 
 const {
     isSpamMessage,
@@ -171,6 +172,13 @@ async function processGroupMessage(msg, bot, ports) {
     
     if (!query.trim()) {
         console.log('Skip empty message');
+        return;
+    }
+
+    // Check if message contains whitelisted keyword
+    const whitelistedKeyword = await containsWhitelistKeyword(query);
+    if (whitelistedKeyword) {
+        console.log(`Message contains whitelisted keyword "${whitelistedKeyword}", skipping spam detection`);
         return;
     }
 

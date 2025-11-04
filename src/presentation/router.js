@@ -39,6 +39,12 @@ const {
     handleImportData
 } = require('../application/usecases/signupHandler.js');
 const { handleSendCommand } = require('../application/usecases/sendHandler.js');
+const { 
+    handleWhitelistingCommand, 
+    handleWhitelistCallback, 
+    handleListWhitelistCommand,
+    handleRemoveWhitelistCommand
+} = require('../application/usecases/whitelistHandler.js');
 
 const LIMITED_MODE = false; 
 const FEATURE_DISABLED_MSGS = [
@@ -69,6 +75,7 @@ You can @echan or mention echan in your message to start a conversation with the
 /signup <address> - Register your eCash address
 /price - Get current eCash price data
 /explorer <address> [page] - Query address transactions
+/whitelisting <keyword> - Request to whitelist a keyword (bypasses spam detection)
 
 If you have any questions, please contact the admin.
 `;
@@ -86,6 +93,8 @@ Welcome to alitayinGPTbot! Here is a list of available commands for admins:
 /send <tokenId> <amount> - Send SLP tokens to user (reply to their message)
 /exportdata - Export all user data to JSON file (for backup/migration)
 /importdata - Import user data from JSON file (reply to exported file)
+/listwhitelist - View all whitelisted keywords
+/removewhitelist <keyword> - Remove a keyword from the whitelist
 `;
 
 // Helper: should handle request
@@ -354,6 +363,68 @@ function registerRoutes(bot) {
         }
     });
 
+    // Listener 3.10: whitelisting (all users)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/whitelisting')) {
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- Processing whitelisting command ---');
+        try {
+            await handleWhitelistingCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to process whitelisting:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to submit whitelist request. Please try again.');
+        }
+    });
+
+    // Listener 3.11: listwhitelist (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/listwhitelist')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- Processing list whitelist command ---');
+        try {
+            await handleListWhitelistCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to list whitelist:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to retrieve whitelist. Please try again.');
+        }
+    });
+
+    // Listener 3.12: removewhitelist (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/removewhitelist')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- Processing remove whitelist command ---');
+        try {
+            await handleRemoveWhitelistCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to remove whitelist keyword:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to remove keyword. Please try again.');
+        }
+    });
+
     // Listener 4: price
     bot.on('message', async (msg) => {
         if (!msg.text) return;
@@ -479,6 +550,9 @@ function registerRoutes(bot) {
             msg.text?.startsWith('/send') ||
             msg.text?.startsWith('/exportdata') ||
             msg.text?.startsWith('/importdata') ||
+            msg.text?.startsWith('/whitelisting') ||
+            msg.text?.startsWith('/listwhitelist') ||
+            msg.text?.startsWith('/removewhitelist') ||
             msg.text?.trim().toLowerCase() === "/start" ||
             msg.text?.trim().toLowerCase() === "/help" ||
             msg.text?.trim().toLowerCase() === "/price" ||
@@ -596,6 +670,22 @@ function registerRoutes(bot) {
     // Track bot-sent messages
     bot.on('send_message', async (chatId, text) => {
         addBotMessageToGroup(chatId, text, BOT_USERNAME);
+    });
+
+    // Listener 9: callback query handler (for whitelist approval/rejection)
+    bot.on('callback_query', async (query) => {
+        try {
+            if (query.data.startsWith('whitelist_')) {
+                console.log('\n--- Processing whitelist callback ---');
+                await handleWhitelistCallback(query, bot);
+            }
+        } catch (error) {
+            console.error('Failed to handle callback query:', error);
+            await bot.answerCallbackQuery(query.id, {
+                text: '❌ An error occurred. Please try again.',
+                show_alert: true
+            });
+        }
     });
 }
 
