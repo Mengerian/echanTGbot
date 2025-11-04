@@ -2,13 +2,15 @@ const {
     KOUSH_USER_ID,
     ALITAYIN_USER_ID,
     SPAM_THRESHOLD,
-    RELEVANT_KEYWORDS
+    RELEVANT_KEYWORDS,
+    NOTIFICATION_GROUP_ID
 } = require('../../../config/config.js');
 
 const { fetchMessageAnalysis } = require('../../infrastructure/ai/messageAnalysis.js');
 const { performSecondarySpamCheck } = require('../../infrastructure/ai/secondarySpamCheck.js');
 const { translateToEnglishIfTargetGroup } = require('../../infrastructure/ai/translation.js');
 const { updateSpamRecord } = require('../../infrastructure/storage/spamUserStore.js');
+const { isSimilarToSpam, addSpamMessage } = require('../../infrastructure/storage/spamMessageCache.js');
 const { kickUser, unbanUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
 
 const {
@@ -71,16 +73,21 @@ async function handleSpamMessage(msg, bot, spamData, query) {
     if (decideSecondarySpamCheck(primarySpam)) {
         const additionalSpam = await performSecondarySpamCheck(query, msg.from.id);
         if (additionalSpam === true) {
-            await handleSpamDeletion(msg, bot);
+            await handleSpamDeletion(msg, bot, query);
             return true;
         }
     }
     return false;
 }
 
-async function handleSpamDeletion(msg, bot) {
+async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
     try {
-        const NOTIFICATION_GROUP_ID = -4815444028;
+        
+        // Add spam message to cache (skip if it's similar to existing spam)
+        if (!skipCache) {
+            const messageContent = query || buildCombinedAnalysisQuery(msg);
+            addSpamMessage(messageContent);
+        }
         
         const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || 'Unknown User';
         const groupName = msg.chat.title || 'Unknown Group';
@@ -207,9 +214,16 @@ async function processGroupMessage(msg, bot, ports) {
         const blacklistedChannels = ['Insider_SOL_Trades'];
         if (channelUsername && blacklistedChannels.includes(channelUsername)) {
             console.log(`Quote/external_reply from blacklisted channel @${channelUsername}, marking as spam immediately`);
-            await handleSpamDeletion(msg, bot);
+            await handleSpamDeletion(msg, bot, query);
             return;
         }
+    }
+
+    // Check similarity with cached spam messages before calling API
+    if (isSimilarToSpam(query, 95)) {
+        console.log('Message is similar to cached spam (>=95%), deleting without API call');
+        await handleSpamDeletion(msg, bot, query, true); // skipCache = true, no need to cache similar spam
+        return;
     }
 
     const answer = await fetchMessageAnalysis(query, msg.from.id);

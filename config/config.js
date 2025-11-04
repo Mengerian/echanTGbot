@@ -15,6 +15,7 @@ module.exports = {
   TARGET_GROUP_IDS: process.env.TARGET_GROUP_IDS.split(','),
   KOUSH_USER_ID: process.env.KOUSH_USER_ID,
   ALITAYIN_USER_ID: process.env.ALITAYIN_USER_ID,
+  NOTIFICATION_GROUP_ID: process.env.NOTIFICATION_GROUP_ID,
 
   // Spam detection configuration
   SPAM_THRESHOLD: parseInt(process.env.SPAM_THRESHOLD),

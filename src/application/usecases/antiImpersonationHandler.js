@@ -1,3 +1,5 @@
+const { NOTIFICATION_GROUP_ID } = require('../../../config/config.js');
+
 const {
     isPotentialNameImpersonation,
     decideAfterAvatarCheck,
@@ -142,7 +144,6 @@ async function handleImpersonation(msg, bot, impersonationData) {
         const notificationMessage = `⚠️ ${userIdentifier} has been removed for impersonating administrator "${impersonatedAdmin.fullName}" (${adminIdentifier}). Their message has been deleted.`;
         await sendMessage(bot, msg.chat.id, notificationMessage);
         
-        const NOTIFICATION_GROUP_ID = -4815444028;
         const adminReport = `🚨 Display Name Impersonation Alert\n\n` +
             `Group: ${msg.chat.title || 'Unknown'} (ID: ${msg.chat.id})\n` +
             `Impersonator: ${userIdentifier} (ID: ${msg.from.id})\n` +
