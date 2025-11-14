@@ -5,6 +5,7 @@ const {
     DATA_KEYWORDS,
     ALITAYIN_USER_ID,
     KOUSH_USER_ID,
+    ECASH_ARMY_GROUP_ID,
 } = require('../../config/config.js');
 const { isGroupWithAlitayin } = require('../infrastructure/telegram/groupUtils.js');
 const {
@@ -57,6 +58,12 @@ const {
     handleStopMessageCommand,
     handleListScheduledCommand
 } = require('../application/usecases/messageHandler.js');
+const {
+    handleMissionCommand,
+    handleMissionCompletion,
+    handleShowMissionCommand,
+    handleDeleteMissionCommand
+} = require('../application/usecases/missionHandler.js');
 
 const LIMITED_MODE = false; 
 const FEATURE_DISABLED_MSGS = [
@@ -120,6 +127,9 @@ Welcome to alitayinGPTbot! Here is a list of available commands for admins:
 /importdata - Import user data from JSON file (reply to exported file)
 /listwhitelist - View all whitelisted keywords
 /removewhitelist <keyword> - Remove a keyword from the whitelist
+/mission <description> - Create a new mission (group only, reward: 1 OORAH)
+/showmission - Show all created missions with their IDs
+/deletemission <mission_id> - Delete a mission by ID (or reply to mission message)
 `;
 
 // Helper: should handle request
@@ -544,6 +554,102 @@ function registerRoutes(bot) {
         }
     });
 
+    // Listener 3.18: mission (admin or ecash army group members)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/mission')) {
+            return;
+        }
+        // Check if user is admin or in ecash army group
+        const isAdmin = ALLOWED_USERS.includes(msg.from.username);
+        const isEcashArmy = String(msg.chat.id) === ECASH_ARMY_GROUP_ID;
+        
+        if (!isAdmin && !isEcashArmy) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- Processing mission command ---');
+        try {
+            await handleMissionCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to create mission:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to create mission. Please try again.');
+        }
+    });
+
+    // Listener 3.19: showmission (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/showmission')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- Processing show mission command ---');
+        try {
+            await handleShowMissionCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to show missions:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to retrieve missions. Please try again.');
+        }
+    });
+
+    // Listener 3.21: deletemission (admin only)
+    bot.on('message', async (msg) => {
+        if (!msg.text?.startsWith('/deletemission')) {
+            return;
+        }
+        if (!ALLOWED_USERS.includes(msg.from.username)) {
+            await bot.sendMessage(msg.chat.id, '❌ This command is only available to administrators.');
+            return;
+        }
+        if (LIMITED_MODE) {
+            await bot.sendMessage(msg.chat.id, pickDisabledMsg());
+            return;
+        }
+        console.log('\n--- Processing delete mission command ---');
+        try {
+            await handleDeleteMissionCommand(msg, bot);
+        } catch (error) {
+            console.error('Failed to delete mission:', error);
+            await bot.sendMessage(msg.chat.id, '❌ Failed to delete mission. Please try again.');
+        }
+    });
+
+    // Listener 3.20: mission completion (all users, group only, when replying with ✅ or "done")
+    bot.on('message', async (msg) => {
+        // Only handle group messages with replies
+        const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+        if (!isGroup || !msg.reply_to_message) {
+            return;
+        }
+
+        // Check if message is ✅ or "done"
+        const text = (msg.text || '').trim().toLowerCase();
+        if (text !== '✅' && text !== 'done') {
+            return;
+        }
+
+        if (LIMITED_MODE) {
+            return;
+        }
+
+        console.log('\n--- Checking for mission completion ---');
+        try {
+            await handleMissionCompletion(msg, bot);
+        } catch (error) {
+            console.error('Failed to process mission completion:', error);
+        }
+    });
+
     // Listener 4: price
     bot.on('message', async (msg) => {
         if (!msg.text) return;
@@ -720,7 +826,7 @@ function registerRoutes(bot) {
             'signup', 'getaddress', 'listaddresses', 'send',
             'exportdata', 'importdata', 'whitelisting', 'listwhitelist',
             'removewhitelist', 'message', 'showmessage', 'deletemessage',
-            'stopmessage', 'listscheduled',
+            'stopmessage', 'listscheduled', 'mission', 'showmission', 'deletemission',
             'start', 'help', 'price', 'ava', 'explorer', 'time', 'translate'
         ];
         
@@ -789,6 +895,9 @@ function registerRoutes(bot) {
             msg.text?.startsWith('/deletemessage') ||
             msg.text?.startsWith('/stopmessage') ||
             msg.text?.startsWith('/listscheduled') ||
+            msg.text?.startsWith('/mission') ||
+            msg.text?.startsWith('/showmission') ||
+            msg.text?.startsWith('/deletemission') ||
             msg.text?.trim().toLowerCase() === "/start" ||
             msg.text?.trim().toLowerCase() === "/help" ||
             msg.text?.trim().toLowerCase() === "/price" ||

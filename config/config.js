@@ -16,6 +16,8 @@ module.exports = {
   KOUSH_USER_ID: process.env.KOUSH_USER_ID,
   ALITAYIN_USER_ID: process.env.ALITAYIN_USER_ID,
   NOTIFICATION_GROUP_ID: process.env.NOTIFICATION_GROUP_ID,
+  // I keep this in hardcode, because i don't think it is neccesary to be putted into env.
+  ECASH_ARMY_GROUP_ID: '-1003023703571',
 
   // Spam detection configuration
   SPAM_THRESHOLD: parseInt(process.env.SPAM_THRESHOLD),
