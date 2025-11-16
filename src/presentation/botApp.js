@@ -2,6 +2,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const { TELEGRAM_TOKEN } = require('../../config/config.js');
 const { registerRoutes } = require('./router.js');
 const { MessageScheduler } = require('../application/services/messageScheduler.js');
+const { startRewardScheduler } = require('../application/services/missionRewardScheduler.js');
 
 function createBotApp() {
     const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
@@ -10,6 +11,9 @@ function createBotApp() {
     // Start message scheduler
     const scheduler = new MessageScheduler(bot);
     scheduler.start();
+    
+    // Start mission reward scheduler
+    startRewardScheduler(bot);
     
     console.log("Bot is running...");
     return bot;

@@ -240,6 +240,55 @@ async function getUserStats(userId) {
 }
 
 /**
+ * Get all users' stats
+ * @returns {Promise<Array>}
+ */
+async function getAllUserStats() {
+    try {
+        const allStats = [];
+        const stream = db.createReadStream({
+            gte: 'userstats:',
+            lte: 'userstats:\xff'
+        });
+
+        for await (const data of stream) {
+            allStats.push(data.value);
+        }
+
+        return allStats;
+    } catch (error) {
+        console.error('Failed to get all user stats:', error);
+        return [];
+    }
+}
+
+/**
+ * Decrement user's mission completion count
+ * @param {number} userId - User ID
+ * @param {number} amount - Amount to decrement
+ * @returns {Promise<boolean>}
+ */
+async function decrementUserCompletionCount(userId, amount) {
+    try {
+        const key = `userstats:${userId}`;
+        const stats = await db.get(key);
+        
+        if (!stats) {
+            return false;
+        }
+        
+        stats.totalCompleted = Math.max(0, stats.totalCompleted - amount);
+        await db.put(key, stats);
+        
+        console.log(`✅ Decremented ${amount} missions for user ${userId}, new total: ${stats.totalCompleted}`);
+        return true;
+    } catch (error) {
+        console.error('Failed to decrement user stats:', error);
+        return false;
+    }
+}
+
+/**
  * Delete mission by ID
  * @param {string} missionId - Mission ID
  * @returns {Promise<boolean>}
@@ -279,6 +328,8 @@ module.exports = {
     hasUserCompletedMission,
     recordMissionCompletion,
     getUserStats,
+    getAllUserStats,
+    decrementUserCompletionCount,
     deleteMission,
     closeDB
 };

@@ -44,8 +44,42 @@ async function handleMessageCommand(msg, bot) {
 
         const messageToSave = msg.reply_to_message.text || msg.reply_to_message.caption || '';
         
-        if (!messageToSave) {
-            await bot.sendMessage(msg.chat.id, '❌ The replied message has no text content to save.');
+        // Extract and download photo if present
+        let photoBuffer = null;
+        let photoMetadata = null;
+        if (msg.reply_to_message.photo && msg.reply_to_message.photo.length > 0) {
+            try {
+                const photo = msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1];
+                
+                // Download photo as stream
+                const fileStream = await bot.getFileStream(photo.file_id);
+                const chunks = [];
+                
+                // Collect stream data
+                await new Promise((resolve, reject) => {
+                    fileStream.on('data', (chunk) => chunks.push(chunk));
+                    fileStream.on('end', resolve);
+                    fileStream.on('error', reject);
+                });
+                
+                photoBuffer = Buffer.concat(chunks);
+                photoMetadata = {
+                    fileSize: photo.file_size,
+                    width: photo.width,
+                    height: photo.height
+                };
+                
+                console.log(`📸 Downloaded photo: ${photoBuffer.length} bytes`);
+            } catch (error) {
+                console.error('Failed to download photo:', error);
+                await bot.sendMessage(msg.chat.id, '❌ Failed to download photo. Please try again.');
+                return;
+            }
+        }
+        
+        // Allow saving if there's text OR photo
+        if (!messageToSave && !photoBuffer) {
+            await bot.sendMessage(msg.chat.id, '❌ The replied message has no content to save.');
             return;
         }
 
@@ -59,14 +93,17 @@ async function handleMessageCommand(msg, bot) {
                 return;
             }
 
-            const success = await saveScheduledMessage(commandName, messageToSave, msg.chat.id, intervalMs, username);
+            const success = await saveScheduledMessage(commandName, messageToSave, msg.chat.id, intervalMs, username, photoBuffer, photoMetadata);
 
             if (success) {
                 const hours = intervalMs / (60 * 60 * 1000);
                 const firstSendTime = new Date(Date.now() + intervalMs).toLocaleString();
+                const contentPreview = photoBuffer 
+                    ? `${photoBuffer ? '🖼️ Photo' : ''}${messageToSave ? ' + ' + messageToSave.substring(0, 30) : ''}${messageToSave.length > 30 ? '...' : ''}`
+                    : `${messageToSave.substring(0, 50)}${messageToSave.length > 50 ? '...' : ''}`;
                 await bot.sendMessage(
                     msg.chat.id, 
-                    `⏰ Repeating message scheduled: "${commandName}"\n\n🔄 Repeats every ${hours}h\n⏱️ First send: ${firstSendTime}\n\n📝 Preview: ${messageToSave.substring(0, 50)}${messageToSave.length > 50 ? '...' : ''}\n\n💡 Use /stopmessage ${commandName} to stop`
+                    `⏰ Repeating message scheduled: "${commandName}"\n\n🔄 Repeats every ${hours}h\n⏱️ First send: ${firstSendTime}\n\n📝 Preview: ${contentPreview}\n\n💡 Use /stopmessage ${commandName} to stop`
                 );
             } else {
                 await bot.sendMessage(msg.chat.id, '❌ Failed to schedule message. Please try again.');
@@ -92,12 +129,15 @@ async function handleMessageCommand(msg, bot) {
             return;
         }
 
-        const success = await saveMessage(commandName, messageToSave, username);
+        const success = await saveMessage(commandName, messageToSave, username, photoBuffer, photoMetadata);
 
         if (success) {
+            const contentPreview = photoBuffer 
+                ? `${photoBuffer ? '🖼️ Photo' : ''}${messageToSave ? ' + ' + messageToSave.substring(0, 30) : ''}${messageToSave.length > 30 ? '...' : ''}`
+                : `${messageToSave.substring(0, 50)}${messageToSave.length > 50 ? '...' : ''}`;
             await bot.sendMessage(
                 msg.chat.id, 
-                `✅ Message saved with command: "${commandName}"\n\n📝 Preview: ${messageToSave.substring(0, 50)}${messageToSave.length > 50 ? '...' : ''}`
+                `✅ Message saved with command: "${commandName}"\n\n📝 Preview: ${contentPreview}`
             );
         } else {
             await bot.sendMessage(msg.chat.id, '❌ Failed to save message. Please try again.');
@@ -125,10 +165,21 @@ async function handleShowMessageCommand(msg, bot) {
         let messageText = `📚 Stored Messages (${messages.length}):\n\n`;
         
         messages.forEach((msgData, index) => {
-            const preview = msgData.messageContent.substring(0, 50);
-            const previewText = msgData.messageContent.length > 50 ? `${preview}...` : preview;
+            const messageType = msgData.messageType || 'text';
+            let contentDisplay = '';
+            
+            if (messageType === 'photo') {
+                contentDisplay = '🖼️ Photo only';
+            } else if (messageType === 'photo_with_caption') {
+                const preview = msgData.messageContent.substring(0, 40);
+                contentDisplay = `🖼️ Photo + ${msgData.messageContent.length > 40 ? `${preview}...` : preview}`;
+            } else {
+                const preview = msgData.messageContent.substring(0, 50);
+                contentDisplay = msgData.messageContent.length > 50 ? `${preview}...` : preview;
+            }
+            
             messageText += `${index + 1}. Command: <code>${msgData.commandName}</code>\n`;
-            messageText += `   📝 ${previewText}\n`;
+            messageText += `   📝 ${contentDisplay}\n`;
             messageText += `   👤 Saved by: ${msgData.savedBy}\n`;
             messageText += `   📅 ${new Date(msgData.savedAt).toLocaleString()}\n\n`;
         });
@@ -140,10 +191,21 @@ async function handleShowMessageCommand(msg, bot) {
             let currentChunk = `📚 Stored Messages (${messages.length}):\n\n`;
             
             messages.forEach((msgData, index) => {
-                const preview = msgData.messageContent.substring(0, 50);
-                const previewText = msgData.messageContent.length > 50 ? `${preview}...` : preview;
+                const messageType = msgData.messageType || 'text';
+                let contentDisplay = '';
+                
+                if (messageType === 'photo') {
+                    contentDisplay = '🖼️ Photo only';
+                } else if (messageType === 'photo_with_caption') {
+                    const preview = msgData.messageContent.substring(0, 40);
+                    contentDisplay = `🖼️ Photo + ${msgData.messageContent.length > 40 ? `${preview}...` : preview}`;
+                } else {
+                    const preview = msgData.messageContent.substring(0, 50);
+                    contentDisplay = msgData.messageContent.length > 50 ? `${preview}...` : preview;
+                }
+                
                 const entry = `${index + 1}. Command: <code>${msgData.commandName}</code>\n` +
-                             `   📝 ${previewText}\n` +
+                             `   📝 ${contentDisplay}\n` +
                              `   👤 Saved by: ${msgData.savedBy}\n` +
                              `   📅 ${new Date(msgData.savedAt).toLocaleString()}\n\n`;
                 
@@ -187,12 +249,22 @@ async function handleDeleteMessageCommand(msg, bot) {
             return;
         }
 
-        const preview = messageData.messageContent.substring(0, 50);
-        const previewText = messageData.messageContent.length > 50 ? `${preview}...` : preview;
+        const messageType = messageData.messageType || 'text';
+        let contentDisplay = '';
+        
+        if (messageType === 'photo') {
+            contentDisplay = '🖼️ Photo only';
+        } else if (messageType === 'photo_with_caption') {
+            const preview = messageData.messageContent.substring(0, 40);
+            contentDisplay = `🖼️ Photo + ${messageData.messageContent.length > 40 ? `${preview}...` : preview}`;
+        } else {
+            const preview = messageData.messageContent.substring(0, 50);
+            contentDisplay = messageData.messageContent.length > 50 ? `${preview}...` : preview;
+        }
         
         await bot.sendMessage(
             msg.chat.id,
-            `⚠️ Are you sure you want to delete this message?\n\nCommand: "${commandName}"\n📝 ${previewText}`,
+            `⚠️ Are you sure you want to delete this message?\n\nCommand: "${commandName}"\n📝 ${contentDisplay}`,
             {
                 reply_markup: {
                     inline_keyboard: [[
@@ -283,6 +355,9 @@ async function handleStoredMessageCommand(msg, bot, commandName, timeParam = nul
             return false;
         }
 
+        const messageType = messageData.messageType || 'text';
+        const photoData = messageData.photo || null;
+
         // If time parameter is provided, start scheduled repeating
         if (timeParam) {
             const intervalMs = parseTimeString(timeParam);
@@ -292,14 +367,22 @@ async function handleStoredMessageCommand(msg, bot, commandName, timeParam = nul
             }
 
             const username = msg.from.username || msg.from.first_name || 'Unknown';
-            const success = await saveScheduledMessage(commandName, messageData.messageContent, msg.chat.id, intervalMs, username);
+            
+            // Extract buffer and metadata if photo exists
+            const photoBuffer = photoData ? Buffer.from(photoData.buffer, 'base64') : null;
+            const photoMetadata = photoData ? photoData.metadata : null;
+            
+            const success = await saveScheduledMessage(commandName, messageData.messageContent, msg.chat.id, intervalMs, username, photoBuffer, photoMetadata);
 
             if (success) {
                 const hours = intervalMs / (60 * 60 * 1000);
                 const firstSendTime = new Date(Date.now() + intervalMs).toLocaleString();
+                const contentPreview = photoData 
+                    ? `${photoData ? '🖼️ Photo' : ''}${messageData.messageContent ? ' + ' + messageData.messageContent.substring(0, 30) : ''}${messageData.messageContent.length > 30 ? '...' : ''}`
+                    : `${messageData.messageContent.substring(0, 50)}${messageData.messageContent.length > 50 ? '...' : ''}`;
                 await bot.sendMessage(
                     msg.chat.id, 
-                    `⏰ Repeating message scheduled: "${commandName}"\n\n🔄 Repeats every ${hours}h\n⏱️ First send: ${firstSendTime}\n\n📝 Preview: ${messageData.messageContent.substring(0, 50)}${messageData.messageContent.length > 50 ? '...' : ''}\n\n💡 Use /stopmessage ${commandName} to stop`
+                    `⏰ Repeating message scheduled: "${commandName}"\n\n🔄 Repeats every ${hours}h\n⏱️ First send: ${firstSendTime}\n\n📝 Preview: ${contentPreview}\n\n💡 Use /stopmessage ${commandName} to stop`
                 );
             } else {
                 await bot.sendMessage(msg.chat.id, '❌ Failed to schedule message. Please try again.');
@@ -308,11 +391,21 @@ async function handleStoredMessageCommand(msg, bot, commandName, timeParam = nul
         }
 
         // No time parameter, just send the message once
-        await bot.sendMessage(msg.chat.id, messageData.messageContent, {
-            reply_to_message_id: msg.message_id
-        });
+        if (messageType === 'photo' || messageType === 'photo_with_caption') {
+            // Send photo from buffer
+            const photoBuffer = Buffer.from(photoData.buffer, 'base64');
+            await bot.sendPhoto(msg.chat.id, photoBuffer, {
+                caption: messageData.messageContent || undefined,
+                reply_to_message_id: msg.message_id
+            });
+        } else {
+            // Send text
+            await bot.sendMessage(msg.chat.id, messageData.messageContent, {
+                reply_to_message_id: msg.message_id
+            });
+        }
 
-        console.log(`✅ Sent stored message: "${commandName}"`);
+        console.log(`✅ Sent stored message (${messageType}): "${commandName}"`);
         return true;
     } catch (error) {
         console.error('Failed to handle stored message command:', error);
@@ -359,14 +452,25 @@ async function handleListScheduledCommand(msg, bot) {
         let messageText = `⏰ Scheduled Repeating Messages (${scheduledMessages.length}):\n\n`;
         
         scheduledMessages.forEach((msgData, index) => {
-            const preview = msgData.messageContent.substring(0, 50);
-            const previewText = msgData.messageContent.length > 50 ? `${preview}...` : preview;
+            const messageType = msgData.messageType || 'text';
+            let contentDisplay = '';
+            
+            if (messageType === 'photo') {
+                contentDisplay = '🖼️ Photo only';
+            } else if (messageType === 'photo_with_caption') {
+                const preview = msgData.messageContent.substring(0, 40);
+                contentDisplay = `🖼️ Photo + ${msgData.messageContent.length > 40 ? `${preview}...` : preview}`;
+            } else {
+                const preview = msgData.messageContent.substring(0, 50);
+                contentDisplay = msgData.messageContent.length > 50 ? `${preview}...` : preview;
+            }
+            
             const hours = msgData.intervalMs / (60 * 60 * 1000);
             const nextSend = new Date(msgData.nextSendTime).toLocaleString();
             messageText += `${index + 1}. Command: <code>${msgData.commandName}</code>\n`;
             messageText += `   🔄 Every ${hours}h\n`;
             messageText += `   ⏱️ Next: ${nextSend}\n`;
-            messageText += `   📝 ${previewText}\n\n`;
+            messageText += `   📝 ${contentDisplay}\n\n`;
         });
 
         messageText += '\n💡 Use /stopmessage &lt;commandname&gt; to stop a repeating message.';
@@ -378,6 +482,10 @@ async function handleListScheduledCommand(msg, bot) {
     }
 }
 
+async function checkStoredMessageExists(commandName) {
+    return await messageExists(commandName);
+}
+
 module.exports = {
     handleMessageCommand,
     handleShowMessageCommand,
@@ -385,6 +493,7 @@ module.exports = {
     handleMessageCallback,
     handleStoredMessageCommand,
     handleStopMessageCommand,
-    handleListScheduledCommand
+    handleListScheduledCommand,
+    checkStoredMessageExists
 };
 

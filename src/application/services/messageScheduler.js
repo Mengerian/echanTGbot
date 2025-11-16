@@ -44,8 +44,21 @@ class MessageScheduler {
 
             for (const msgData of dueMessages) {
                 try {
-                    await this.bot.sendMessage(msgData.chatId, msgData.messageContent);
-                    console.log(`✅ Sent scheduled message: "${msgData.commandName}" to chat ${msgData.chatId}`);
+                    const messageType = msgData.messageType || 'text';
+                    
+                    // Send based on message type
+                    if (messageType === 'photo' || messageType === 'photo_with_caption') {
+                        // Send photo from buffer with optional caption
+                        const photoBuffer = Buffer.from(msgData.photo.buffer, 'base64');
+                        await this.bot.sendPhoto(msgData.chatId, photoBuffer, {
+                            caption: msgData.messageContent || undefined
+                        });
+                    } else {
+                        // Send text message
+                        await this.bot.sendMessage(msgData.chatId, msgData.messageContent);
+                    }
+                    
+                    console.log(`✅ Sent scheduled message (${messageType}): "${msgData.commandName}" to chat ${msgData.chatId}`);
                     
                     // Update next send time (repeat the message)
                     await updateScheduledMessageNextTime(msgData.key, msgData.intervalMs);

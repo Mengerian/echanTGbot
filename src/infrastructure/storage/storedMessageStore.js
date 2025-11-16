@@ -10,20 +10,36 @@ const db = new Level(dbPath, { valueEncoding: 'json' });
  * @param {string} commandName - Command name to identify the message
  * @param {string} messageContent - Full message content to store
  * @param {string} savedBy - Username who saved the message
+ * @param {Buffer} photoBuffer - Optional photo buffer data
+ * @param {Object} photoMetadata - Optional photo metadata { fileSize, width, height }
  * @returns {Promise<boolean>}
  */
-async function saveMessage(commandName, messageContent, savedBy) {
+async function saveMessage(commandName, messageContent, savedBy, photoBuffer = null, photoMetadata = null) {
     try {
         const normalizedCommandName = commandName.toLowerCase().trim();
         const key = `message:${normalizedCommandName}`;
+        
+        // Determine message type
+        let messageType = 'text';
+        if (photoBuffer) {
+            messageType = messageContent ? 'photo_with_caption' : 'photo';
+        }
+        
         const data = {
             commandName: normalizedCommandName,
+            messageType,
             messageContent,
+            photo: photoBuffer ? {
+                buffer: photoBuffer.toString('base64'), 
+                metadata: photoMetadata
+            } : null,
             savedBy,
             savedAt: new Date().toISOString()
         };
         await db.put(key, data);
-        console.log(`✅ Message saved with command: "${normalizedCommandName}" by ${savedBy}`);
+        
+        const typeDesc = messageType === 'text' ? 'text' : `photo${messageContent ? ' with caption' : ''}`;
+        console.log(`✅ Message saved (${typeDesc}): "${normalizedCommandName}" by ${savedBy}`);
         return true;
     } catch (error) {
         console.error('Failed to save message:', error);
@@ -116,14 +132,26 @@ async function messageExists(commandName) {
     }
 }
 
-async function saveScheduledMessage(commandName, messageContent, chatId, intervalMs, savedBy) {
+async function saveScheduledMessage(commandName, messageContent, chatId, intervalMs, savedBy, photoBuffer = null, photoMetadata = null) {
     try {
         const normalizedCommandName = commandName.toLowerCase().trim();
         const key = `scheduled:${normalizedCommandName}`;
         const nextSendTime = Date.now() + intervalMs;
+        
+        // Determine message type
+        let messageType = 'text';
+        if (photoBuffer) {
+            messageType = messageContent ? 'photo_with_caption' : 'photo';
+        }
+        
         const data = {
             commandName: normalizedCommandName,
+            messageType,
             messageContent,
+            photo: photoBuffer ? {
+                buffer: photoBuffer.toString('base64'), // Store as base64 string
+                metadata: photoMetadata
+            } : null,
             chatId,
             intervalMs,
             nextSendTime,
