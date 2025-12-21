@@ -28,6 +28,46 @@ const {
     decideDisciplinaryAction,
 } = require('../../domain/policies/spamPolicy.js');
 
+function isImageDocument(document) {
+    return Boolean(
+        document &&
+        typeof document.mime_type === 'string' &&
+        document.mime_type.startsWith('image/')
+    );
+}
+
+function hasImageMedia(msg) {
+    if (!msg) return false;
+    return Boolean(
+        (msg.photo && msg.photo.length) ||
+        msg.sticker ||
+        isImageDocument(msg.document) ||
+        msg.animation
+    );
+}
+
+function getImageFileId(msg) {
+    if (!msg) return null;
+
+    if (msg.photo && msg.photo.length > 0) {
+        return msg.photo[msg.photo.length - 1].file_id;
+    }
+
+    if (msg.sticker) {
+        return msg.sticker.thumbnail ? msg.sticker.thumbnail.file_id : msg.sticker.file_id;
+    }
+
+    if (isImageDocument(msg.document)) {
+        return msg.document.file_id;
+    }
+
+    if (msg.animation) {
+        return msg.animation.thumbnail ? msg.animation.thumbnail.file_id : msg.animation.file_id;
+    }
+
+    return null;
+}
+
 function buildCombinedAnalysisQuery(msg) {
     try {
         const isForwarded = Boolean(msg && (msg.forward_from || msg.forward_sender_name || msg.forward_from_chat));
@@ -35,8 +75,8 @@ function buildCombinedAnalysisQuery(msg) {
         const caption = (msg && msg.caption) ? String(msg.caption).trim() : '';
         const contentParts = [];
 
-        // Check if message contains image
-        if (msg && (msg.photo || msg.sticker)) {
+        // Check if message contains image-like media
+        if (hasImageMedia(msg)) {
             contentParts.push('[This message contains an image]');
         }
 
@@ -109,18 +149,20 @@ async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
         // Add spam message/image to cache (skip if it's similar to existing spam)
         if (!skipCache) {
             // Check if message contains image
-            if (msg.photo || msg.sticker) {
+            if (hasImageMedia(msg)) {
                 // For image messages, only store the image, not text
-                const largestPhoto = msg.photo ? msg.photo[msg.photo.length - 1] :
-                    msg.sticker.thumbnail || msg.sticker;
+                const imageFileId = getImageFileId(msg);
 
-                await addSpamImage(bot, largestPhoto.file_id, msg.from.id, {
-                    chatId: msg.chat.id,
-                    messageId: msg.message_id,
-                    hasSticker: !!msg.sticker,
-                    caption: msg.caption
-                });
-                console.log('Stored spam image in database');
+                if (imageFileId) {
+                    await addSpamImage(bot, imageFileId, msg.from.id, {
+                        chatId: msg.chat.id,
+                        messageId: msg.message_id,
+                        hasSticker: !!msg.sticker,
+                        caption: msg.caption,
+                        mimeType: msg.document?.mime_type
+                    });
+                    console.log('Stored spam image in database');
+                }
             } else {
                 // For text-only messages, store text content
                 const messageContent = query || buildCombinedAnalysisQuery(msg);
@@ -174,6 +216,18 @@ async function handleTranslation(msg, bot) {
 }
 
 async function processGroupMessage(msg, bot, ports) {
+    console.log('processGroupMessage entry', {
+        chatId: msg?.chat?.id,
+        chatType: msg?.chat?.type,
+        fromId: msg?.from?.id,
+        isBot: msg?.from?.is_bot,
+        hasPhoto: !!msg?.photo,
+        hasSticker: !!msg?.sticker,
+        hasDocument: !!msg?.document,
+        documentMime: msg?.document?.mime_type,
+        hasAnimation: !!msg?.animation
+    });
+
     if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") {
         return;
     }
@@ -213,8 +267,8 @@ async function processGroupMessage(msg, bot, ports) {
     console.log(query);
     console.log('Query length:', query.length);
     
-    if (!query.trim()) {
-        console.log('Skip empty message');
+    if (!query.trim() && !hasImageMedia(msg)) {
+        console.log('Skip empty message (no text or image)');
         return;
     }
 
@@ -280,8 +334,8 @@ async function processGroupMessage(msg, bot, ports) {
     }
 
     // Check if image is spam (similarity check) before calling API
-    if ((msg.photo || msg.sticker) && await isSpamImage(bot, msg.photo ? msg.photo[msg.photo.length - 1].file_id :
-        (msg.sticker.thumbnail ? msg.sticker.thumbnail.file_id : msg.sticker.file_id))) {
+    const possibleImageFileId = getImageFileId(msg);
+    if (possibleImageFileId && await isSpamImage(bot, possibleImageFileId)) {
         console.log('Image is similar to cached spam image, deleting without API call');
         await handleSpamDeletion(msg, bot, query, true); // skipCache = true, no need to cache similar spam
         return;

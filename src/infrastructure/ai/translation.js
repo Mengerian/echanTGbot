@@ -6,8 +6,13 @@ async function translateToEnglishIfTargetGroup(msg, bot) {
     return false;
   }
 
-  const query = msg.text || msg.caption || '';
-  const translationQuery = `translate ${query.trim()} to english, only output English.`;
+  // Ignore empty/too-short content (including images without captions)
+  const query = (msg.text || msg.caption || '').trim();
+  if (!query || query.length < 5) {
+    return false;
+  }
+
+  const translationQuery = `translate ${query} to english, only output English.`;
 
   try {
     const client = new EchanApiClient(API_KEY, API_ENDPOINT);

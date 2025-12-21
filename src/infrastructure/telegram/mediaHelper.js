@@ -33,6 +33,31 @@ async function getImageUrls(msg, bot) {
             console.error('Failed to get sticker file link:', error);
         }
     }
+
+    // Handle image documents (users sending images as files)
+    if (msg.document && typeof msg.document.mime_type === 'string' && msg.document.mime_type.startsWith('image/')) {
+        try {
+            const fileLink = await bot.getFileLink(msg.document.file_id);
+            imageUrls.push(fileLink);
+            console.log(`Found image document in message: ${fileLink}`);
+        } catch (error) {
+            console.error('Failed to get document image file link:', error);
+        }
+    }
+
+    // Handle animations/GIFs (use thumbnail if available, else file)
+    if (msg.animation) {
+        const target = msg.animation.thumbnail ? msg.animation.thumbnail : msg.animation;
+        if (target && target.file_id) {
+            try {
+                const fileLink = await bot.getFileLink(target.file_id);
+                imageUrls.push(fileLink);
+                console.log(`Found animation image in message: ${fileLink}`);
+            } catch (error) {
+                console.error('Failed to get animation file link:', error);
+            }
+        }
+    }
     
     return imageUrls;
 }

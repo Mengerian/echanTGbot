@@ -1088,7 +1088,15 @@ function registerRoutes(bot) {
             return;
         }
 
-        if (!msg || (!msg.text && !msg.caption && !msg.reply_to_message)) {
+        if (!msg || (
+            !msg.text &&
+            !msg.caption &&
+            !msg.reply_to_message &&
+            !msg.photo &&
+            !msg.sticker &&
+            !msg.document &&
+            !msg.animation
+        )) {
             return;
         }
 
