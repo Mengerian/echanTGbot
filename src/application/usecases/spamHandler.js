@@ -7,12 +7,14 @@ const {
     USERNAME_LENGTH_THRESHOLD
 } = require('../../../config/config.js');
 
-const { fetchMessageAnalysis } = require('../../infrastructure/ai/messageAnalysis.js');
+const { fetchMessageAnalysis, fetchMessageAnalysisWithImage } = require('../../infrastructure/ai/messageAnalysis.js');
 const { performSecondarySpamCheck } = require('../../infrastructure/ai/secondarySpamCheck.js');
 const { translateToEnglishIfTargetGroup } = require('../../infrastructure/ai/translation.js');
 const { updateSpamRecord } = require('../../infrastructure/storage/spamUserStore.js');
 const { isSimilarToSpam, addSpamMessage } = require('../../infrastructure/storage/spamMessageCache.js');
+const { addSpamImage, isSpamImage } = require('../../infrastructure/storage/spamImageStore.js');
 const { kickUser, unbanUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
+const { getImageUrls } = require('../../infrastructure/telegram/mediaHelper.js');
 const { containsWhitelistKeyword } = require('../../infrastructure/storage/whitelistKeywordStore.js');
 const {
     isUserTrustedInGroup,
@@ -32,6 +34,11 @@ function buildCombinedAnalysisQuery(msg) {
         const text = (msg && msg.text) ? String(msg.text).trim() : '';
         const caption = (msg && msg.caption) ? String(msg.caption).trim() : '';
         const contentParts = [];
+
+        // Check if message contains image
+        if (msg && (msg.photo || msg.sticker)) {
+            contentParts.push('[This message contains an image]');
+        }
 
         // Check if sender has long username and add it to content
         if (msg && msg.from) {
@@ -73,7 +80,7 @@ function buildCombinedAnalysisQuery(msg) {
     }
 }
 
-async function handleSpamMessage(msg, bot, spamData, query) {
+async function handleSpamMessage(msg, bot, spamData, query, imageUrls = []) {
     const { deviation, suspicion, inducement, spam } = spamData;
     const primarySpam = isSpamMessage({
         spamFlag: spam === true,
@@ -87,7 +94,7 @@ async function handleSpamMessage(msg, bot, spamData, query) {
     });
 
     if (decideSecondarySpamCheck(primarySpam)) {
-        const additionalSpam = await performSecondarySpamCheck(query, msg.from.id);
+        const additionalSpam = await performSecondarySpamCheck(query, msg.from.id, imageUrls);
         if (additionalSpam === true) {
             await handleSpamDeletion(msg, bot, query);
             return true;
@@ -99,10 +106,26 @@ async function handleSpamMessage(msg, bot, spamData, query) {
 async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
     try {
         
-        // Add spam message to cache (skip if it's similar to existing spam)
+        // Add spam message/image to cache (skip if it's similar to existing spam)
         if (!skipCache) {
-            const messageContent = query || buildCombinedAnalysisQuery(msg);
-            addSpamMessage(messageContent);
+            // Check if message contains image
+            if (msg.photo || msg.sticker) {
+                // For image messages, only store the image, not text
+                const largestPhoto = msg.photo ? msg.photo[msg.photo.length - 1] :
+                    msg.sticker.thumbnail || msg.sticker;
+
+                await addSpamImage(bot, largestPhoto.file_id, msg.from.id, {
+                    chatId: msg.chat.id,
+                    messageId: msg.message_id,
+                    hasSticker: !!msg.sticker,
+                    caption: msg.caption
+                });
+                console.log('Stored spam image in database');
+            } else {
+                // For text-only messages, store text content
+                const messageContent = query || buildCombinedAnalysisQuery(msg);
+                addSpamMessage(messageContent);
+            }
         }
         
         const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || 'Unknown User';
@@ -256,6 +279,14 @@ async function processGroupMessage(msg, bot, ports) {
         return;
     }
 
+    // Check if image is spam (similarity check) before calling API
+    if ((msg.photo || msg.sticker) && await isSpamImage(bot, msg.photo ? msg.photo[msg.photo.length - 1].file_id :
+        (msg.sticker.thumbnail ? msg.sticker.thumbnail.file_id : msg.sticker.file_id))) {
+        console.log('Image is similar to cached spam image, deleting without API call');
+        await handleSpamDeletion(msg, bot, query, true); // skipCache = true, no need to cache similar spam
+        return;
+    }
+
     // Check similarity with cached spam messages before calling API
     if (isSimilarToSpam(query, 95)) {
         console.log('Message is similar to cached spam (>=95%), deleting without API call');
@@ -263,14 +294,24 @@ async function processGroupMessage(msg, bot, ports) {
         return;
     }
 
-    const answer = await fetchMessageAnalysis(query, msg.from.id);
+    // Get image URLs if present
+    const imageUrls = await getImageUrls(msg, bot);
+    let answer;
+
+    if (imageUrls.length > 0) {
+        console.log(`Analyzing message with ${imageUrls.length} image(s)`);
+        answer = await fetchMessageAnalysisWithImage(query || 'Analyze this image for spam content', imageUrls, msg.from.id);
+    } else {
+        answer = await fetchMessageAnalysis(query, msg.from.id);
+    }
+    
     if (!answer) {
         console.log('No analysis result, skip');
         return;
     }
 
     if (isBotAdmin) {
-        const wasSpam = await handleSpamMessage(msg, bot, answer, query);
+        const wasSpam = await handleSpamMessage(msg, bot, answer, query, imageUrls);
 
         if (wasSpam) {
             // If spam is detected, reset the user's normal-message streak

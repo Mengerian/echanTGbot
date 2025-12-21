@@ -86,6 +86,58 @@ async function batchMessageAnalysis(messages) {
 }
 
 /**
+ * Get message analysis with image support.
+ * @param {string} query - text content
+ * @param {string|string[]} imageUrl - single image URL or array of image URLs
+ * @param {string|number} userId
+ * @returns {Promise<Object|null>}
+ */
+async function fetchMessageAnalysisWithImage(query, imageUrl, userId) {
+    const maxRetries = 3;
+    let attempt = 0;
+    let totalAttempts = 0;
+    const maxTotalAttempts = 6;
+    let currentKey = ADDITIONAL_API_KEY;
+
+    const primaryClient = new EchanApiClient(ADDITIONAL_API_KEY, API_ENDPOINT);
+    const backupClient = new EchanApiClient(ADDITIONAL_API_KEY_BACKUP, API_ENDPOINT);
+
+    while (attempt < maxRetries && totalAttempts < maxTotalAttempts) {
+        try {
+            attempt++;
+            totalAttempts++;
+
+            const client = currentKey === ADDITIONAL_API_KEY ? primaryClient : backupClient;
+            const data = await client.sendImageRequest(imageUrl, query, userId);
+            const answer = JSON.parse(data.answer);
+            console.log(`✅ Image message analysis successful (attempt ${totalAttempts}/${maxTotalAttempts})`);
+            return answer;
+
+        } catch (error) {
+            if (error.response?.status === 400) {
+                console.log(`Image message analysis failed, attempt ${totalAttempts}/${maxTotalAttempts}`);
+            } else {
+                console.error(`❌ Image message analysis data fetch failed (attempt ${totalAttempts}/${maxTotalAttempts}):`, error.message || error);
+            }
+
+            if ((error.response?.status === 400 || attempt === maxRetries) &&
+                currentKey === ADDITIONAL_API_KEY &&
+                totalAttempts < maxTotalAttempts) {
+                currentKey = ADDITIONAL_API_KEY_BACKUP;
+                attempt = 0;
+                console.log('🔄 Switching to backup image message analysis API key');
+            } else if (totalAttempts >= maxTotalAttempts) {
+                console.log('⚠️ Max total attempts reached, stopping retry');
+                break;
+            }
+        }
+    }
+    
+    console.log('❌ Image message analysis failed, returning null');
+    return null;
+}
+
+/**
  * Check if a message needs response.
  * @param {string} query
  * @param {string|number} userId
@@ -103,6 +155,7 @@ async function checkNeedsResponse(query, userId) {
 
 module.exports = {
     fetchMessageAnalysis,
+    fetchMessageAnalysisWithImage,
     batchMessageAnalysis,
     checkNeedsResponse
 }; 

@@ -6,7 +6,7 @@ const {
   SECONDARY_SPAM_API_KEY_BACKUP,
 } = require('../../../config/config.js');
 
-async function performSecondarySpamCheck(query, userId) {
+async function performSecondarySpamCheck(query, userId, imageUrls = null) {
   const maxRetriesPerKey = 3;
   const maxTotalAttempts = 6;
   let attemptWithCurrentKey = 0;
@@ -21,7 +21,16 @@ async function performSecondarySpamCheck(query, userId) {
       attemptWithCurrentKey += 1;
       totalAttempts += 1;
       const client = currentKey === SECONDARY_SPAM_API_KEY ? primaryClient : backupClient;
-      const data = await client.sendTextRequest(query, userId);
+      
+      // Use image request if images are provided, otherwise use text request
+      let data;
+      if (imageUrls && imageUrls.length > 0) {
+        console.log(`Secondary spam check with ${imageUrls.length} image(s)`);
+        data = await client.sendImageRequest(imageUrls, query, userId);
+      } else {
+        data = await client.sendTextRequest(query, userId);
+      }
+      
       const answer = JSON.parse(data.answer);
       if (typeof answer.spam === 'boolean') {
         return answer.spam;

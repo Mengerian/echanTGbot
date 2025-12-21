@@ -6,6 +6,7 @@ const {
   DAILY_WINDOW_MS,
 } = require('../../../config/config.js');
 const { createRateLimiter } = require('../services/rateLimiter.js');
+const { getPhotoUrl } = require('../../infrastructure/telegram/mediaHelper.js');
 
 const userConversationIds = {};
 
@@ -194,8 +195,7 @@ async function handlePhotoMessage(msg, photo, query, bot, ALLOWED_USERS, BLOCKED
     return;
   }
 
-  const file = await bot.getFile(photo.file_id);
-  const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+  const fileUrl = await getPhotoUrl(bot, photo.file_id, TELEGRAM_TOKEN);
 
   limiter.enqueue(async () => {
     try {
