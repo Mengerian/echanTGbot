@@ -6,6 +6,7 @@ const {
   sendChatNotification,
   sendLogGroupReport,
 } = require('../../infrastructure/telegram/reportingActions.js');
+const { buildSpamModerationButtons } = require('./spamModerationHandler.js');
 
 async function handleReportCommand(msg, bot) {
   if (!msg.reply_to_message) {
@@ -21,6 +22,8 @@ async function handleReportCommand(msg, bot) {
 
   const original = msg.reply_to_message;
   const groupName = msg.chat.title || 'Unknown Group';
+  const targetUserId = original.from?.id;
+  const targetUsername = original.from?.username ? `@${original.from.username}` : (original.from?.first_name || 'unknown');
 
   await forwardOrCopyToLogGroup(bot, NOTIFICATION_GROUP_ID, original, msg.chat.id, groupName);
 
@@ -30,9 +33,18 @@ async function handleReportCommand(msg, bot) {
   const notificationMessage = `Thanks for the report @${reporterUsername}, I've removed the spam message.`;
   await sendChatNotification(bot, msg.chat.id, notificationMessage);
 
-  const targetUsername = original.from?.username || 'unknown';
-  const reportInfo = `Reported message from @${targetUsername} deleted by me, report by @${reporterUsername}`;
-  await sendLogGroupReport(bot, NOTIFICATION_GROUP_ID, reportInfo);
+  const reportInfo = `Reported message from ${targetUsername} deleted by me, report by @${reporterUsername}`;
+
+  const moderationButtons = targetUserId
+    ? buildSpamModerationButtons({
+        chatId: msg.chat.id,
+        userId: targetUserId,
+        showBan: true,
+        showUnban: false,
+      })
+    : null;
+
+  await sendLogGroupReport(bot, NOTIFICATION_GROUP_ID, reportInfo, moderationButtons || {});
 }
 
 module.exports = {

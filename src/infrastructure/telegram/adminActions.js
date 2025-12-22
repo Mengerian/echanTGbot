@@ -61,7 +61,8 @@ async function getIsAdmin(bot, chatId, userId) {
 }
 
 module.exports = {
-  kickUser,
+  banUser,       // explicit export for clarity
+  kickUser,      // alias
   unbanUser,
   deleteMessage,
   forwardMessage,

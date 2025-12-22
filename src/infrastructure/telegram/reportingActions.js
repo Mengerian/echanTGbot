@@ -57,10 +57,10 @@ async function sendChatNotification(bot, chatId, notificationMessage) {
   }
 }
 
-async function sendLogGroupReport(bot, logGroupId, reportText) {
+async function sendLogGroupReport(bot, logGroupId, reportText, options = {}) {
   if (!logGroupId) return;
   try {
-    await bot.sendMessage(logGroupId, reportText);
+    await bot.sendMessage(logGroupId, reportText, options);
   } catch (error) {
     console.error('Failed to send report to log group:', error);
   }

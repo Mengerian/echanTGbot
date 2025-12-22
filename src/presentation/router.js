@@ -65,6 +65,7 @@ const {
     handleShowMissionCommand,
     handleDeleteMissionCommand
 } = require('../application/usecases/missionHandler.js');
+const { handleSpamModerationCallback } = require('../application/usecases/spamModerationHandler.js');
 
 const LIMITED_MODE = false; 
 const FEATURE_DISABLED_MSGS = [
@@ -1156,6 +1157,9 @@ function registerRoutes(bot) {
             } else if (query.data.startsWith('msg_')) {
                 console.log('\n--- Processing message callback ---');
                 await handleMessageCallback(query, bot);
+            } else if (query.data.startsWith('spam_action:')) {
+                console.log('\n--- Processing spam moderation callback ---');
+                await handleSpamModerationCallback(query, bot);
             } else if (query.data.startsWith('help_') || query.data.startsWith('cmd_')) {
                 console.log('\n--- Processing help menu callback ---');
                 const isAdmin = ALLOWED_USERS.includes(query.from.username);

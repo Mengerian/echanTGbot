@@ -16,6 +16,7 @@ const { addSpamImage, isSpamImage } = require('../../infrastructure/storage/spam
 const { kickUser, unbanUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
 const { getImageUrls } = require('../../infrastructure/telegram/mediaHelper.js');
 const { containsWhitelistKeyword } = require('../../infrastructure/storage/whitelistKeywordStore.js');
+const { buildSpamModerationButtons } = require('./spamModerationHandler.js');
 const {
     isUserTrustedInGroup,
     recordNormalMessageInGroup,
@@ -186,11 +187,18 @@ async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
             
             let actionTaken = '';
             const action = decideDisciplinaryAction({ currentSpamCountInWindow: userRecord.count });
+            let moderationButtons = null;
             if (action === 'warn') {
                 const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
                 if (kickSuccess) {
                     await unbanUser(bot, msg.chat.id, msg.from.id);
                     actionTaken = `kicked ${userName} (first spam offense, can rejoin)`;
+                    // 提供手动升级为封禁的按钮
+                    moderationButtons = buildSpamModerationButtons({
+                        chatId: msg.chat.id,
+                        userId: msg.from.id,
+                        showBan: true,
+                    });
                 } else {
                     actionTaken = `cannot kick ${userName} (regular group limitation - first spam offense)`;
                 }
@@ -198,13 +206,18 @@ async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
                 const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
                 if (kickSuccess) {
                     actionTaken = `BANNED ${userName} permanently (${userRecord.count} spam messages in 3h)`;
+                    moderationButtons = buildSpamModerationButtons({
+                        chatId: msg.chat.id,
+                        userId: msg.from.id,
+                        showUnban: true,
+                    });
                 } else {
                     actionTaken = `cannot ban ${userName} (regular group limitation - ${userRecord.count} spam messages in 3h)`;
                 }
             }
             
             const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
-            await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage);
+            await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage, moderationButtons || {});
         }
     } catch (error) {
         console.error('Failed to handle spam deletion:', error);
