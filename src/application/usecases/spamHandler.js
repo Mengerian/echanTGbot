@@ -14,7 +14,7 @@ const { updateSpamRecord } = require('../../infrastructure/storage/spamUserStore
 const { isSimilarToSpam, addSpamMessage } = require('../../infrastructure/storage/spamMessageCache.js');
 const { addSpamImage, isSpamImage } = require('../../infrastructure/storage/spamImageStore.js');
 const { kickUser, unbanUser, deleteMessage, forwardMessage, getIsAdmin } = require('../../infrastructure/telegram/adminActions.js');
-const { getImageUrls } = require('../../infrastructure/telegram/mediaHelper.js');
+const { getImageUrls, hasImageMedia, getImageFileId } = require('../../infrastructure/telegram/mediaHelper.js');
 const { containsWhitelistKeyword } = require('../../infrastructure/storage/whitelistKeywordStore.js');
 const { buildSpamModerationButtons } = require('./spamModerationHandler.js');
 const {
@@ -28,46 +28,6 @@ const {
     decideSecondarySpamCheck,
     decideDisciplinaryAction,
 } = require('../../domain/policies/spamPolicy.js');
-
-function isImageDocument(document) {
-    return Boolean(
-        document &&
-        typeof document.mime_type === 'string' &&
-        document.mime_type.startsWith('image/')
-    );
-}
-
-function hasImageMedia(msg) {
-    if (!msg) return false;
-    return Boolean(
-        (msg.photo && msg.photo.length) ||
-        msg.sticker ||
-        isImageDocument(msg.document) ||
-        msg.animation
-    );
-}
-
-function getImageFileId(msg) {
-    if (!msg) return null;
-
-    if (msg.photo && msg.photo.length > 0) {
-        return msg.photo[msg.photo.length - 1].file_id;
-    }
-
-    if (msg.sticker) {
-        return msg.sticker.thumbnail ? msg.sticker.thumbnail.file_id : msg.sticker.file_id;
-    }
-
-    if (isImageDocument(msg.document)) {
-        return msg.document.file_id;
-    }
-
-    if (msg.animation) {
-        return msg.animation.thumbnail ? msg.animation.thumbnail.file_id : msg.animation.file_id;
-    }
-
-    return null;
-}
 
 function buildCombinedAnalysisQuery(msg) {
     try {

@@ -7,6 +7,15 @@ const {
   sendLogGroupReport,
 } = require('../../infrastructure/telegram/reportingActions.js');
 const { buildSpamModerationButtons } = require('./spamModerationHandler.js');
+const { addSpamMessage } = require('../../infrastructure/storage/spamMessageCache.js');
+const { addSpamImage } = require('../../infrastructure/storage/spamImageStore.js');
+const { hasImageMedia, getImageFileId } = require('../../infrastructure/telegram/mediaHelper.js');
+
+function getTextContent(msg) {
+  const text = msg?.text;
+  const caption = msg?.caption;
+  return (text || caption || '').trim();
+}
 
 async function handleReportCommand(msg, bot) {
   if (!msg.reply_to_message) {
@@ -24,6 +33,28 @@ async function handleReportCommand(msg, bot) {
   const groupName = msg.chat.title || 'Unknown Group';
   const targetUserId = original.from?.id;
   const targetUsername = original.from?.username ? `@${original.from.username}` : (original.from?.first_name || 'unknown');
+
+  try {
+    if (hasImageMedia(original)) {
+      const imageFileId = getImageFileId(original);
+      if (imageFileId) {
+        await addSpamImage(bot, imageFileId, targetUserId, {
+          chatId: msg.chat.id,
+          messageId: original.message_id,
+          caption: original.caption,
+          mimeType: original.document?.mime_type,
+          reporter: msg.from?.username,
+        });
+      }
+    } else {
+      const content = getTextContent(original);
+      if (content) {
+        addSpamMessage(content);
+      }
+    }
+  } catch (cacheError) {
+    console.error('Failed to cache reported spam message:', cacheError);
+  }
 
   await forwardOrCopyToLogGroup(bot, NOTIFICATION_GROUP_ID, original, msg.chat.id, groupName);
 

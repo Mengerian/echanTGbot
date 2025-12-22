@@ -1,6 +1,46 @@
 // Telegram media file helper functions.
 // Infrastructure layer module.
 
+function isImageDocument(document) {
+    return Boolean(
+        document &&
+        typeof document.mime_type === 'string' &&
+        document.mime_type.startsWith('image/')
+    );
+}
+
+function hasImageMedia(msg) {
+    if (!msg) return false;
+    return Boolean(
+        (msg.photo && msg.photo.length) ||
+        msg.sticker ||
+        isImageDocument(msg.document) ||
+        msg.animation
+    );
+}
+
+function getImageFileId(msg) {
+    if (!msg) return null;
+
+    if (msg.photo && msg.photo.length > 0) {
+        return msg.photo[msg.photo.length - 1].file_id;
+    }
+
+    if (msg.sticker) {
+        return msg.sticker.thumbnail ? msg.sticker.thumbnail.file_id : msg.sticker.file_id;
+    }
+
+    if (isImageDocument(msg.document)) {
+        return msg.document.file_id;
+    }
+
+    if (msg.animation) {
+        return msg.animation.thumbnail ? msg.animation.thumbnail.file_id : msg.animation.file_id;
+    }
+
+    return null;
+}
+
 /**
  * Get image file URLs from Telegram message
  * @param {Object} msg - Telegram message object
@@ -35,7 +75,7 @@ async function getImageUrls(msg, bot) {
     }
 
     // Handle image documents (users sending images as files)
-    if (msg.document && typeof msg.document.mime_type === 'string' && msg.document.mime_type.startsWith('image/')) {
+    if (isImageDocument(msg.document)) {
         try {
             const fileLink = await bot.getFileLink(msg.document.file_id);
             imageUrls.push(fileLink);
@@ -85,6 +125,9 @@ async function getPhotoUrlSimple(bot, fileId) {
 }
 
 module.exports = {
+    isImageDocument,
+    hasImageMedia,
+    getImageFileId,
     getImageUrls,
     getPhotoUrl,
     getPhotoUrlSimple,
