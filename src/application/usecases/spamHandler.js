@@ -374,6 +374,7 @@ async function processGroupMessage(msg, bot, ports) {
         if (detection.isNonEnglish) {
             console.log(`Non-English detected (trusted path): reason=${detection.reason}, ratio=${detection.ratio?.toFixed(3)}, coverage=${detection.coverage != null ? detection.coverage.toFixed(3) : 'n/a'}, coverageStem=${detection.coverageStem != null ? detection.coverageStem.toFixed(3) : 'n/a'}, len=${detection.length}, detectMs=${detection.durationMs}`);
             await handleTranslation(msg, bot);
+            return;
         }
         // For short ASCII-looking messages from trusted users, still call API to confirm English
         const userText = (msg.text || msg.caption || '').trim();
