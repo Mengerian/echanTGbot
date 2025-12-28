@@ -1,5 +1,11 @@
 const { Level } = require('level');
 const path = require('path');
+const {
+    getAllMessages,
+    getAllScheduledMessages,
+    saveMessage,
+    saveScheduledMessage
+} = require('./storedMessageStore.js');
 
 // Initialize levelDB
 const dbPath = path.join(__dirname, '../../../data/userAddresses');
@@ -92,12 +98,21 @@ async function deleteUserAddress(userId) {
  */
 async function exportAllData() {
     try {
-        const users = await getAllUsers();
+        const [users, messages, scheduledMessages] = await Promise.all([
+            getAllUsers(),
+            getAllMessages(),
+            getAllScheduledMessages()
+        ]);
+
         const exportData = {
-            version: '1.0',
+            version: '1.1',
             exportDate: new Date().toISOString(),
             totalUsers: users.length,
-            users: users
+            totalMessages: messages.length,
+            totalScheduledMessages: scheduledMessages.length,
+            users,
+            messages,
+            scheduledMessages
         };
         return JSON.stringify(exportData, null, 2);
     } catch (error) {
@@ -113,26 +128,28 @@ async function exportAllData() {
  */
 async function importAllData(jsonData) {
     const results = {
-        success: 0,
-        failed: 0,
-        errors: []
+        users: { success: 0, failed: 0, errors: [] },
+        messages: { success: 0, failed: 0, errors: [] },
+        scheduledMessages: { success: 0, failed: 0, errors: [] }
     };
 
     try {
         const importData = JSON.parse(jsonData);
-        
-        if (!importData.users || !Array.isArray(importData.users)) {
+        const usersArray = Array.isArray(importData.users) ? importData.users : null;
+        if (!usersArray) {
             throw new Error('Invalid data format: missing users array');
         }
 
-        console.log(`🔄 Starting import of ${importData.users.length} users...`);
+        const messagesArray = Array.isArray(importData.messages) ? importData.messages : [];
+        const scheduledArray = Array.isArray(importData.scheduledMessages) ? importData.scheduledMessages : [];
 
-        for (const user of importData.users) {
+        console.log(`🔄 Starting import of ${usersArray.length} users, ${messagesArray.length} messages, ${scheduledArray.length} scheduled messages...`);
+
+        for (const user of usersArray) {
             try {
-                // Validate required fields
                 if (!user.userId || !user.address) {
-                    results.failed++;
-                    results.errors.push(`Missing userId or address for user: ${JSON.stringify(user)}`);
+                    results.users.failed++;
+                    results.users.errors.push(`Missing userId or address for user: ${JSON.stringify(user)}`);
                     continue;
                 }
 
@@ -146,16 +163,85 @@ async function importAllData(jsonData) {
                 };
 
                 await db.put(key, data);
-                results.success++;
+                results.users.success++;
                 console.log(`✅ Imported user ${user.userId} (${user.username || 'unknown'})`);
             } catch (error) {
-                results.failed++;
-                results.errors.push(`Failed to import user ${user.userId}: ${error.message}`);
+                results.users.failed++;
+                results.users.errors.push(`Failed to import user ${user.userId}: ${error.message}`);
                 console.error(`❌ Failed to import user ${user.userId}:`, error);
             }
         }
 
-        console.log(`✅ Import completed: ${results.success} success, ${results.failed} failed`);
+        for (const message of messagesArray) {
+            try {
+                const commandName = (message.commandName || message.key || '').toLowerCase().trim();
+                if (!commandName) {
+                    results.messages.failed++;
+                    results.messages.errors.push('Missing commandName for message template');
+                    continue;
+                }
+
+                const photoBuffer = message.photo?.buffer ? Buffer.from(message.photo.buffer, 'base64') : null;
+                const photoMetadata = message.photo?.metadata || null;
+                const content = message.messageContent || '';
+                const savedBy = message.savedBy || 'imported';
+
+                const saved = await saveMessage(commandName, content, savedBy, photoBuffer, photoMetadata);
+                if (saved) {
+                    results.messages.success++;
+                } else {
+                    results.messages.failed++;
+                    results.messages.errors.push(`Failed to save message template: ${commandName}`);
+                }
+            } catch (error) {
+                results.messages.failed++;
+                results.messages.errors.push(`Failed to import message template: ${error.message}`);
+                console.error('❌ Failed to import message template:', error);
+            }
+        }
+
+        for (const item of scheduledArray) {
+            try {
+                const commandName = (item.commandName || item.key?.replace(/^scheduled:/, '') || '').toLowerCase().trim();
+                if (!commandName || !item.chatId || !item.intervalMs) {
+                    results.scheduledMessages.failed++;
+                    results.scheduledMessages.errors.push(`Missing required fields for scheduled message: ${JSON.stringify(item)}`);
+                    continue;
+                }
+
+                const photoBuffer = item.photo?.buffer ? Buffer.from(item.photo.buffer, 'base64') : null;
+                const photoMetadata = item.photo?.metadata || null;
+                const content = item.messageContent || '';
+                const savedBy = item.savedBy || 'imported';
+
+                const saved = await saveScheduledMessage(
+                    commandName,
+                    content,
+                    item.chatId,
+                    item.intervalMs,
+                    savedBy,
+                    photoBuffer,
+                    photoMetadata
+                );
+
+                if (saved) {
+                    results.scheduledMessages.success++;
+                } else {
+                    results.scheduledMessages.failed++;
+                    results.scheduledMessages.errors.push(`Failed to save scheduled message: ${commandName}`);
+                }
+            } catch (error) {
+                results.scheduledMessages.failed++;
+                results.scheduledMessages.errors.push(`Failed to import scheduled message: ${error.message}`);
+                console.error('❌ Failed to import scheduled message:', error);
+            }
+        }
+
+        console.log(
+            `✅ Import completed: users ${results.users.success}/${results.users.failed} (success/failed), ` +
+            `messages ${results.messages.success}/${results.messages.failed}, ` +
+            `scheduled ${results.scheduledMessages.success}/${results.scheduledMessages.failed}`
+        );
         return results;
     } catch (error) {
         console.error('Failed to import data:', error);

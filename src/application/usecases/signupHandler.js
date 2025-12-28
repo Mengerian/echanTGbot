@@ -180,7 +180,12 @@ async function handleExportData(msg, bot) {
         const data = JSON.parse(jsonData);
         await bot.sendMessage(
             msg.chat.id,
-            `✅ Export completed!\n\n📊 Total users: ${data.totalUsers}\n📅 Export date: ${new Date(data.exportDate).toLocaleString()}\n\n💡 To import this data on another server, use:\n/importdata (reply to the exported file)`
+            `✅ Export completed!\n\n` +
+            `📊 Users: ${data.totalUsers}\n` +
+            `💾 Templates: ${data.totalMessages ?? 0}\n` +
+            `⏰ Scheduled: ${data.totalScheduledMessages ?? 0}\n` +
+            `📅 Export date: ${new Date(data.exportDate).toLocaleString()}\n\n` +
+            `💡 To import this data on another server, use:\n/importdata (reply to the exported file)`
         );
         
         console.log(`Data exported by @${msg.from.username}: ${data.totalUsers} users`);
@@ -223,22 +228,38 @@ async function handleImportData(msg, bot) {
 
         // Report results
         let message = `✅ Import completed!\n\n`;
-        message += `📊 Successfully imported: ${results.success} users\n`;
+        message += `📊 Users imported: ${results.users.success}\n`;
+        message += `💾 Templates imported: ${results.messages.success}\n`;
+        message += `⏰ Scheduled imported: ${results.scheduledMessages.success}\n`;
         
-        if (results.failed > 0) {
-            message += `⚠️ Failed: ${results.failed} users\n\n`;
-            message += `Errors:\n`;
-            results.errors.slice(0, 5).forEach(error => {
-                message += `• ${error}\n`;
-            });
-            
-            if (results.errors.length > 5) {
-                message += `\n... and ${results.errors.length - 5} more errors`;
+        const hasUserErrors = results.users.failed > 0;
+        const hasMsgErrors = results.messages.failed > 0;
+        const hasSchedErrors = results.scheduledMessages.failed > 0;
+
+        if (hasUserErrors || hasMsgErrors || hasSchedErrors) {
+            message += `\n⚠️ Errors encountered:\n`;
+
+            if (hasUserErrors) {
+                message += `• Users failed: ${results.users.failed}\n`;
+                results.users.errors.slice(0, 3).forEach(err => message += `   - ${err}\n`);
+            }
+            if (hasMsgErrors) {
+                message += `• Templates failed: ${results.messages.failed}\n`;
+                results.messages.errors.slice(0, 3).forEach(err => message += `   - ${err}\n`);
+            }
+            if (hasSchedErrors) {
+                message += `• Scheduled failed: ${results.scheduledMessages.failed}\n`;
+                results.scheduledMessages.errors.slice(0, 3).forEach(err => message += `   - ${err}\n`);
             }
         }
 
         await bot.sendMessage(msg.chat.id, message);
-        console.log(`Data imported by @${msg.from.username}: ${results.success} success, ${results.failed} failed`);
+        console.log(
+            `Data imported by @${msg.from.username}: ` +
+            `users ${results.users.success}/${results.users.failed}, ` +
+            `messages ${results.messages.success}/${results.messages.failed}, ` +
+            `scheduled ${results.scheduledMessages.success}/${results.scheduledMessages.failed}`
+        );
     } catch (error) {
         console.error('Error in handleImportData:', error);
         await bot.sendMessage(
