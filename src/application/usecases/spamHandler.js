@@ -121,6 +121,13 @@ function buildCombinedAnalysisQuery(msg) {
                 contentParts.push(`[Sender Name]: ${displayName}`);
                 console.log(`Added long username to spam check: "${displayName}" (length: ${displayName.length})`);
             }
+        } else if (msg && msg.sender_chat) {
+            // For channel messages, include channel name
+            const channelName = msg.sender_chat.title || msg.sender_chat.username || '';
+            if (channelName) {
+                contentParts.push(`[Channel]: ${channelName}`);
+                console.log(`Added channel name to spam check: "${channelName}"`);
+            }
         }
 
         if (msg && msg.quote && msg.quote.text) {
@@ -168,7 +175,8 @@ async function handleSpamMessage(msg, bot, spamData, query, imageUrls = []) {
     });
 
     if (decideSecondarySpamCheck(primarySpam)) {
-        const additionalSpam = await performSecondarySpamCheck(query, msg.from.id, imageUrls);
+        const senderId = msg.from ? msg.from.id : (msg.sender_chat ? msg.sender_chat.id : 0);
+        const additionalSpam = await performSecondarySpamCheck(query, senderId, imageUrls);
         if (additionalSpam === true) {
             await handleSpamDeletion(msg, bot, query);
             return true;
@@ -179,6 +187,8 @@ async function handleSpamMessage(msg, bot, spamData, query, imageUrls = []) {
 
 async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
     try {
+        const isFromChannel = !msg.from && msg.sender_chat;
+        const senderId = msg.from ? msg.from.id : (msg.sender_chat ? msg.sender_chat.id : 0);
         
         // Add spam message/image to cache (skip if it's similar to existing spam)
         if (!skipCache) {
@@ -188,7 +198,7 @@ async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
                 const imageFileId = getImageFileId(msg);
 
                 if (imageFileId) {
-                    await addSpamImage(bot, imageFileId, msg.from.id, {
+                    await addSpamImage(bot, imageFileId, senderId, {
                         chatId: msg.chat.id,
                         messageId: msg.message_id,
                         hasSticker: !!msg.sticker,
@@ -204,53 +214,82 @@ async function handleSpamDeletion(msg, bot, query = null, skipCache = false) {
             }
         }
         
-        const userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || 'Unknown User';
+        let userName;
+        if (isFromChannel) {
+            userName = msg.sender_chat.title || (msg.sender_chat.username ? `@${msg.sender_chat.username}` : 'Unknown Channel');
+        } else {
+            userName = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || 'Unknown User';
+        }
+        
         const groupName = msg.chat.title || 'Unknown Group';
-        const sourceInfo = `Spam detected from ${userName} in "${groupName}"`;
+        const senderType = isFromChannel ? 'channel' : 'user';
+        const sourceInfo = `Spam detected from ${senderType} ${userName} in "${groupName}"`;
         await bot.sendMessage(NOTIFICATION_GROUP_ID, sourceInfo);
 
         await forwardMessage(bot, NOTIFICATION_GROUP_ID, msg.chat.id, msg.message_id);
 
-        const isAdmin = await getIsAdmin(bot, msg.chat.id, msg.from.id);
+        const isAdmin = await getIsAdmin(bot, msg.chat.id, senderId);
 
         if (!isAdmin) {
             await deleteMessage(bot, msg.chat.id, msg.message_id);
             
-            const userRecord = updateSpamRecord(msg.from.id);
-            
-            let actionTaken = '';
-            const action = decideDisciplinaryAction({ currentSpamCountInWindow: userRecord.count });
-            let moderationButtons = null;
-            if (action === 'warn') {
-                const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
-                if (kickSuccess) {
-                    await unbanUser(bot, msg.chat.id, msg.from.id);
-                    actionTaken = `kicked ${userName} (first spam offense, can rejoin)`;
-                    // 提供手动升级为封禁的按钮
-                    moderationButtons = buildSpamModerationButtons({
-                        chatId: msg.chat.id,
-                        userId: msg.from.id,
-                        showBan: true,
-                    });
-                } else {
-                    actionTaken = `cannot kick ${userName} (regular group limitation - first spam offense)`;
+            if (isFromChannel) {
+                // For channel spam, ban the channel from the group
+                try {
+                    const banSuccess = await bot.banChatSenderChat(msg.chat.id, msg.sender_chat.id);
+                    if (banSuccess) {
+                        const actionTaken = `BANNED channel ${userName} from posting in this group`;
+                        const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
+                        await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage);
+                    } else {
+                        const actionTaken = `Deleted spam from channel ${userName} (cannot ban channel - may lack permissions)`;
+                        const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
+                        await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage);
+                    }
+                } catch (banError) {
+                    console.error('Failed to ban channel:', banError);
+                    const actionTaken = `Deleted spam from channel ${userName} (ban failed: ${banError.message})`;
+                    const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
+                    await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage);
                 }
             } else {
-                const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
-                if (kickSuccess) {
-                    actionTaken = `BANNED ${userName} permanently (${userRecord.count} spam messages in 3h)`;
-                    moderationButtons = buildSpamModerationButtons({
-                        chatId: msg.chat.id,
-                        userId: msg.from.id,
-                        showUnban: true,
-                    });
+                // For user spam, use existing logic
+                const userRecord = updateSpamRecord(msg.from.id);
+                
+                let actionTaken = '';
+                const action = decideDisciplinaryAction({ currentSpamCountInWindow: userRecord.count });
+                let moderationButtons = null;
+                if (action === 'warn') {
+                    const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
+                    if (kickSuccess) {
+                        await unbanUser(bot, msg.chat.id, msg.from.id);
+                        actionTaken = `kicked ${userName} (first spam offense, can rejoin)`;
+                        // 提供手动升级为封禁的按钮
+                        moderationButtons = buildSpamModerationButtons({
+                            chatId: msg.chat.id,
+                            userId: msg.from.id,
+                            showBan: true,
+                        });
+                    } else {
+                        actionTaken = `cannot kick ${userName} (regular group limitation - first spam offense)`;
+                    }
                 } else {
-                    actionTaken = `cannot ban ${userName} (regular group limitation - ${userRecord.count} spam messages in 3h)`;
+                    const kickSuccess = await kickUser(bot, msg.chat.id, msg.from.id);
+                    if (kickSuccess) {
+                        actionTaken = `BANNED ${userName} permanently (${userRecord.count} spam messages in 3h)`;
+                        moderationButtons = buildSpamModerationButtons({
+                            chatId: msg.chat.id,
+                            userId: msg.from.id,
+                            showUnban: true,
+                        });
+                    } else {
+                        actionTaken = `cannot ban ${userName} (regular group limitation - ${userRecord.count} spam messages in 3h)`;
+                    }
                 }
+                
+                const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
+                await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage, moderationButtons || {});
             }
-            
-            const explanationMessage = `Spam detected in "${groupName}" - ${actionTaken}`;
-            await bot.sendMessage(NOTIFICATION_GROUP_ID, explanationMessage, moderationButtons || {});
         }
     } catch (error) {
         console.error('Failed to handle spam deletion:', error);
@@ -267,6 +306,8 @@ async function processGroupMessage(msg, bot, ports) {
         chatType: msg?.chat?.type,
         fromId: msg?.from?.id,
         isBot: msg?.from?.is_bot,
+        senderChatId: msg?.sender_chat?.id,
+        senderChatType: msg?.sender_chat?.type,
         hasPhoto: !!msg?.photo,
         hasSticker: !!msg?.sticker,
         hasDocument: !!msg?.document,
@@ -279,7 +320,16 @@ async function processGroupMessage(msg, bot, ports) {
     }
 
     // Ignore bot messages; only track human users for trust / spam detection
-    if (!msg.from || msg.from.is_bot) {
+    // Allow messages from channels (sender_chat) for spam detection
+    const isFromChannel = !msg.from && msg.sender_chat && msg.sender_chat.type === 'channel';
+    const isFromBot = msg.from && msg.from.is_bot;
+    const senderId = msg.from ? msg.from.id : (msg.sender_chat ? msg.sender_chat.id : 0);
+    
+    if (!msg.from && !isFromChannel) {
+        return;
+    }
+    
+    if (isFromBot) {
         return;
     }
 
@@ -363,9 +413,10 @@ async function processGroupMessage(msg, bot, ports) {
         }
     }
 
+    // Channels are never "trusted" - always check them for spam
     // If user has already built enough normal-message history in this group,
     // skip further spam detection for better UX.
-    if (isUserTrustedInGroup(msg.chat.id, msg.from.id)) {
+    if (!isFromChannel && isUserTrustedInGroup(msg.chat.id, msg.from.id)) {
         console.log(
             `User ${msg.from.id} in chat ${msg.chat.id} is trusted (>= normal streak threshold), skipping spam detection`
         );
@@ -381,7 +432,7 @@ async function processGroupMessage(msg, bot, ports) {
         const asciiSafe = detection?.ratio != null ? detection.ratio < 0.15 : true;
         if (userText && userText.length < 50 && asciiSafe) {
             try {
-                const langAnalysis = await fetchMessageAnalysis(query, msg.from.id);
+                const langAnalysis = await fetchMessageAnalysis(query, senderId);
                 if (langAnalysis && langAnalysis.is_english === false) {
                     console.log('API marked trusted short message as non-English, translating');
                     await handleTranslation(msg, bot);
@@ -421,9 +472,9 @@ async function processGroupMessage(msg, bot, ports) {
 
     if (imageUrls.length > 0) {
         console.log(`Analyzing message with ${imageUrls.length} image(s)`);
-        answer = await fetchMessageAnalysisWithImage(query || 'Analyze this image for spam content', imageUrls, msg.from.id);
+        answer = await fetchMessageAnalysisWithImage(query || 'Analyze this image for spam content', imageUrls, senderId);
     } else {
-        answer = await fetchMessageAnalysis(query, msg.from.id);
+        answer = await fetchMessageAnalysis(query, senderId);
     }
     
     if (!answer) {
@@ -435,13 +486,17 @@ async function processGroupMessage(msg, bot, ports) {
         const wasSpam = await handleSpamMessage(msg, bot, answer, query, imageUrls);
 
         if (wasSpam) {
-            // If spam is detected, reset the user's normal-message streak
-            resetNormalMessageStreakInGroup(msg.chat.id, msg.from.id);
+            // If spam is detected, reset the user's normal-message streak (only for users, not channels)
+            if (!isFromChannel) {
+                resetNormalMessageStreakInGroup(msg.chat.id, msg.from.id);
+            }
             return;
         }
 
-        // Non-spam message from a human user in group: record as normal.
-        recordNormalMessageInGroup(msg.chat.id, msg.from.id);
+        // Non-spam message from a human user in group: record as normal (only for users, not channels)
+        if (!isFromChannel) {
+            recordNormalMessageInGroup(msg.chat.id, msg.from.id);
+        }
 
         // 非 trusted 用户仅使用 API 的 is_english 标记，不再使用本地启发式
         const apiIsEnglish = answer?.is_english;
