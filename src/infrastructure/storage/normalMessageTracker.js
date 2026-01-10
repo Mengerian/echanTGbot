@@ -1,9 +1,14 @@
-// In-memory tracker for users' normal message streaks in each group.
+// Persisted tracker for users' normal message streaks in each group.
 // Keyed by `${chatId}:${userId}`.
 // When a user in a group has a configured number of consecutive normal messages,
 // they are treated as "trusted" and group spam detection can be skipped for them.
 
+const { Level } = require('level');
+const path = require('path');
 const { NORMAL_STREAK_THRESHOLD } = require('../../../config/config.js');
+
+const dbPath = path.join(__dirname, '../../../data/normalMessageTracker');
+const db = new Level(dbPath, { valueEncoding: 'json' });
 
 /**
  * @typedef {Object} NormalMessageRecord
@@ -15,6 +20,44 @@ const { NORMAL_STREAK_THRESHOLD } = require('../../../config/config.js');
 /** @type {Map<string, NormalMessageRecord>} */
 const normalMessageTracker = new Map();
 
+let loadPromise = null;
+
+async function ensureLoaded() {
+    if (!loadPromise) {
+        loadPromise = (async () => {
+            try {
+                for await (const [key, value] of db.iterator()) {
+                    if (value && typeof value === 'object') {
+                        normalMessageTracker.set(key, value);
+                    }
+                }
+                console.log(`Loaded ${normalMessageTracker.size} normal message records from DB`);
+            } catch (err) {
+                console.error('Failed to load normal message tracker DB:', err);
+            }
+        })();
+    }
+    return loadPromise;
+}
+
+async function persistRecord(key, record) {
+    try {
+        await db.put(key, record);
+    } catch (err) {
+        console.error(`Failed to persist normal message record for ${key}:`, err);
+    }
+}
+
+async function deleteRecord(key) {
+    try {
+        await db.del(key);
+    } catch (err) {
+        if (err.code !== 'LEVEL_NOT_FOUND') {
+            console.error(`Failed to delete normal message record for ${key}:`, err);
+        }
+    }
+}
+
 function makeKey(chatId, userId) {
     return `${String(chatId)}:${String(userId)}`;
 }
@@ -23,9 +66,10 @@ function makeKey(chatId, userId) {
  * Check if a user is trusted in a specific group.
  * @param {number|string} chatId
  * @param {number|string} userId
- * @returns {boolean}
+ * @returns {Promise<boolean>}
  */
-function isUserTrustedInGroup(chatId, userId) {
+async function isUserTrustedInGroup(chatId, userId) {
+    await ensureLoaded();
     if (chatId == null || userId == null) return false;
     const key = makeKey(chatId, userId);
     const record = normalMessageTracker.get(key);
@@ -38,9 +82,10 @@ function isUserTrustedInGroup(chatId, userId) {
  * once the threshold is reached.
  * @param {number|string} chatId
  * @param {number|string} userId
- * @returns {NormalMessageRecord}
+ * @returns {Promise<NormalMessageRecord>}
  */
-function recordNormalMessageInGroup(chatId, userId) {
+async function recordNormalMessageInGroup(chatId, userId) {
+    await ensureLoaded();
     if (chatId == null || userId == null) return null;
     const key = makeKey(chatId, userId);
     const now = Date.now();
@@ -55,6 +100,7 @@ function recordNormalMessageInGroup(chatId, userId) {
     if (existing.trusted) {
         existing.lastUpdated = now;
         normalMessageTracker.set(key, existing);
+        persistRecord(key, existing);
         return existing;
     }
 
@@ -69,6 +115,7 @@ function recordNormalMessageInGroup(chatId, userId) {
     }
 
     normalMessageTracker.set(key, existing);
+    persistRecord(key, existing);
     return existing;
 }
 
@@ -78,17 +125,21 @@ function recordNormalMessageInGroup(chatId, userId) {
  * @param {number|string} chatId
  * @param {number|string} userId
  */
-function resetNormalMessageStreakInGroup(chatId, userId) {
+async function resetNormalMessageStreakInGroup(chatId, userId) {
+    await ensureLoaded();
     if (chatId == null || userId == null) return;
     const key = makeKey(chatId, userId);
     const existing = normalMessageTracker.get(key);
     if (!existing) return;
 
-    normalMessageTracker.set(key, {
+    const resetRecord = {
         streak: 0,
         trusted: false,
         lastUpdated: Date.now(),
-    });
+    };
+
+    normalMessageTracker.set(key, resetRecord);
+    persistRecord(key, resetRecord);
 }
 
 /**
@@ -98,15 +149,18 @@ function resetNormalMessageStreakInGroup(chatId, userId) {
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; 
 const RECORD_TTL_MS = 24 * 60 * 60 * 1000;
 
-setInterval(() => {
+setInterval(async () => {
+    await ensureLoaded();
     const now = Date.now();
     for (const [key, record] of normalMessageTracker.entries()) {
         if (!record || typeof record.lastUpdated !== 'number') {
             normalMessageTracker.delete(key);
+            deleteRecord(key);
             continue;
         }
         if (now - record.lastUpdated > RECORD_TTL_MS) {
             normalMessageTracker.delete(key);
+            deleteRecord(key);
         }
     }
 }, CLEANUP_INTERVAL_MS);

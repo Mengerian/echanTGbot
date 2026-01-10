@@ -427,7 +427,7 @@ async function processGroupMessage(msg, bot, ports) {
     // Channels are never "trusted" - always check them for spam
     // If user has already built enough normal-message history in this group,
     // skip further spam detection for better UX.
-    if (!isFromChannel && isUserTrustedInGroup(msg.chat.id, msg.from.id)) {
+    if (!isFromChannel && await isUserTrustedInGroup(msg.chat.id, msg.from.id)) {
         console.log(
             `User ${msg.from.id} in chat ${msg.chat.id} is trusted (>= normal streak threshold), skipping spam detection`
         );
@@ -497,14 +497,14 @@ async function processGroupMessage(msg, bot, ports) {
         if (wasSpam) {
             // If spam is detected, reset the user's normal-message streak (only for users, not channels)
             if (!isFromChannel) {
-                resetNormalMessageStreakInGroup(msg.chat.id, msg.from.id);
+                await resetNormalMessageStreakInGroup(msg.chat.id, msg.from.id);
             }
             return;
         }
 
         // Non-spam message from a human user in group: record as normal (only for users, not channels)
         if (!isFromChannel) {
-            recordNormalMessageInGroup(msg.chat.id, msg.from.id);
+            await recordNormalMessageInGroup(msg.chat.id, msg.from.id);
         }
 
         // 非 trusted 用户仅使用 API 的 is_english 标记，不再使用本地启发式
