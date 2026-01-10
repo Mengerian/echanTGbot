@@ -12,9 +12,19 @@ const { addSpamImage } = require('../../infrastructure/storage/spamImageStore.js
 const { hasImageMedia, getImageFileId } = require('../../infrastructure/telegram/mediaHelper.js');
 
 function getTextContent(msg) {
-  const text = msg?.text;
-  const caption = msg?.caption;
-  return (text || caption || '').trim();
+  const text = (msg?.text || '').trim();
+  const caption = (msg?.caption || '').trim();
+  const main = text || caption || '';
+
+  // Include quoted text when present to improve similarity caching.
+  const quoteText = (msg?.quote?.text || msg?.quote?.caption || '').trim();
+  if (quoteText && main) {
+    return `[Quoted]: ${quoteText}\n\n${main}`;
+  }
+  if (quoteText) {
+    return `[Quoted]: ${quoteText}`;
+  }
+  return main;
 }
 
 async function handleReportCommand(msg, bot) {
