@@ -99,6 +99,11 @@ async function processUserReward(bot, userId, userStats, tokenId, tokenDecimals,
     // Send notification to log group
     if (NOTIFICATION_GROUP_ID) {
         try {
+            const txid = result?.txid || '';
+            const shortTxid = txid ? `${txid.slice(0, 4)}...${txid.slice(-4)}` : 'unknown';
+            const txLink = txid
+                ? `<a href="https://explorer.e.cash/tx/${txid}">${shortTxid}</a>`
+                : 'unknown';
             await bot.sendMessage(
                 NOTIFICATION_GROUP_ID,
                 `🎁 Mission Milestone Reward!\n\n` +
@@ -106,7 +111,8 @@ async function processUserReward(bot, userId, userStats, tokenId, tokenDecimals,
                 `🎯 Completed: ${MISSIONS_REQUIRED} missions\n` +
                 `💰 Reward: ${REWARD_AMOUNT} ${tokenName}\n` +
                 `📊 Remaining missions: ${Math.max(0, userStats.totalCompleted - MISSIONS_REQUIRED)}\n` +
-                `🔗 TX: ${result.txid}`
+                `🔗 txid: ${txLink}`,
+                { parse_mode: 'HTML' }
             );
         } catch (notifError) {
             console.log(`ℹ️ Could not send notification to log group: ${notifError.message}`);
@@ -115,13 +121,19 @@ async function processUserReward(bot, userId, userStats, tokenId, tokenDecimals,
 
     // Try to notify user directly (if they have a private chat with bot)
     try {
+        const txid = result?.txid || '';
+        const shortTxid = txid ? `${txid.slice(0, 4)}...${txid.slice(-4)}` : 'unknown';
+        const txLink = txid
+            ? `<a href="https://explorer.e.cash/tx/${txid}">${shortTxid}</a>`
+            : 'unknown';
         await bot.sendMessage(
             userId,
             `🎉 Congratulations!\n\n` +
             `You've completed ${MISSIONS_REQUIRED} missions and earned:\n` +
             `💰 ${REWARD_AMOUNT} ${tokenName}\n\n` +
             `Keep completing missions to earn more rewards!\n` +
-            `🔗 Transaction: ${result.txid}`
+            `🔗 txid: ${txLink}`,
+            { parse_mode: 'HTML' }
         );
     } catch (dmError) {
         // User might not have started a private chat with the bot, that's ok

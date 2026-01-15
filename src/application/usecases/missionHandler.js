@@ -151,6 +151,11 @@ async function handleMissionCompletion(msg, bot) {
 
             if (NOTIFICATION_GROUP_ID) {
                 try {
+                    const txid = result?.txid || '';
+                    const shortTxid = txid ? `${txid.slice(0, 4)}...${txid.slice(-4)}` : 'unknown';
+                    const txLink = txid
+                        ? `<a href="https://explorer.e.cash/tx/${txid}">${shortTxid}</a>`
+                        : 'unknown';
                     await bot.sendMessage(
                         NOTIFICATION_GROUP_ID,
                         `🎯 Mission Completed!\n\n` +
@@ -158,7 +163,8 @@ async function handleMissionCompletion(msg, bot) {
                         `🎯 Mission ID: ${mission.id}\n` +
                         `📝 Description: ${mission.description}\n` +
                         `🎁 Reward: 1 OORAH\n` +
-                        `🔗 TX: ${result.txid}`
+                        `🔗 txid: ${txLink}`,
+                        { parse_mode: 'HTML' }
                     );
                 } catch (notifError) {
                     console.log(`ℹ️ Could not send notification to log group (ID: ${NOTIFICATION_GROUP_ID}): ${notifError.message}`);
